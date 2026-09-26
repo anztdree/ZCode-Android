@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light theme (DEFAULT) - ZCode Mobile -->
+    <color name="accent">#7C3AED</color>
+    <color name="accent_dim">#9F67F5</color>
+    <color name="bg_light">#F7F7FB</color>
+    <color name="surface_light">#FFFFFF</color>
+    <color name="text_primary_light">#17171F</color>
+    <color name="text_secondary_light">#6B6B7B</color>
+    <color name="bubble_user_light">#EDE6FD</color>
+    <color name="bubble_bot_light">#FFFFFF</color>
+    <color name="code_bg_light">#F1EDFB</color>
+    <color name="divider_light">#E7E7EF</color>
+    <color name="danger">#D64545</color>
+    <color name="ok_green">#2E9E5B</color>
+
+    <!-- Dark theme (cadangan) -->
+    <color name="bg_dark">#0E0E14</color>
+    <color name="surface_dark">#17171F</color>
+    <color name="text_primary_dark">#ECECF4</color>
+    <color name="text_secondary_dark">#9A9AAB</color>
+    <color name="bubble_user_dark">#2A2140</color>
+    <color name="bubble_bot_dark">#1D1D27</color>
+    <color name="code_bg_dark">#12121A</color>
+    <color name="divider_dark">#26262F</color>
+</resources>
