@@ -2,18 +2,20 @@ package com.zcodemobile.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.text.TextUtils;
-import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.WebView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.RadioButton;
@@ -48,10 +50,13 @@ public class MainActivity extends Activity {
     private EditText inputText;
     private Button sendBtn;
     private ChatAdapter chatAdapter;
-    private JSONArray history = new JSONArray(); // {role, content}
-    private StringBuilder lastBotBuf;
+    private JSONArray history = new JSONArray();
     private boolean agentBusy = false;
     private AgentEngine engine;
+    private final List<Integer> pendingToolCards = new ArrayList<>();
+
+    /* Sesi */
+    private long sessionId = SessionStore.newSession();
 
     /* Berkas */
     private ListView fileList;
@@ -95,6 +100,8 @@ public class MainActivity extends Activity {
         setupFiles(ws);
         setupTodo();
         setupSettings();
+        setupHeaderActions();
+        fillModels(null);
         refreshHeader();
     }
 
@@ -151,15 +158,11 @@ public class MainActivity extends Activity {
 
     private void paintHeader() {
         if (dark) {
-            titleText.setTextColor(Color.parseColor("#ECECF4"));
-            modelChip.setBackgroundColor(Color.parseColor("#1D1D27"));
-            modelChip.setTextColor(Color.parseColor("#9F67F5"));
-            pathText.setTextColor(Color.parseColor("#9A9AAB"));
+            titleText.setTextColor(Color.parseColor("#FAFAFA"));
+            modelChip.setTextColor(Color.parseColor("#A3A3A3"));
         } else {
-            titleText.setTextColor(Color.parseColor("#17171F"));
-            modelChip.setBackgroundColor(Color.parseColor("#EDE6FD"));
-            modelChip.setTextColor(Color.parseColor("#7C3AED"));
-            pathText.setTextColor(Color.parseColor("#6B6B7B"));
+            titleText.setTextColor(Color.parseColor("#0A0A0A"));
+            modelChip.setTextColor(Color.parseColor("#737373"));
         }
     }
 
@@ -170,18 +173,119 @@ public class MainActivity extends Activity {
         modelChip.setText(prov + " • " + (model.isEmpty() ? "pilih model" : model));
     }
 
+    /* ================= HEADER AKSI (sesi + model picker) ================= */
+
+    private void setupHeaderActions() {
+        modelChip.setOnClickListener(v -> showModelPicker());
+
+        findViewById(R.id.newChatBtn).setOnClickListener(v -> newChat());
+
+        findViewById(R.id.historyBtn).setOnClickListener(v -> showHistory());
+    }
+
+    private void showModelPicker() {
+        String type = Prefs.get(this, "provider_type", "zai");
+        final List<String> ids = new ArrayList<>();
+        if ("custom".equals(type)) {
+            String saved = Prefs.get(this, "custom_models", "");
+            try {
+                JSONArray arr = new JSONArray(saved);
+                for (int i = 0; i < arr.length(); i++) ids.add(arr.getString(i));
+            } catch (Exception ignore) { }
+            if (ids.isEmpty()) {
+                toast("Buka Setelan → Muat ulang daftar model dulu");
+                return;
+            }
+        } else {
+            ids.addAll(java.util.Arrays.asList(Prefs.zaiModels()));
+        }
+        String current = Prefs.activeModel(this);
+        int sel = ids.indexOf(current);
+
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.pick_model)
+                .setSingleChoiceItems(ids.toArray(new String[0]), sel, (d, w) -> {
+                    Prefs.set(this, "model_" + type, ids.get(w));
+                    d.dismiss();
+                    refreshHeader();
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
+    }
+
+    private void newChat() {
+        saveCurrentSession();
+        history = new JSONArray();
+        sessionId = SessionStore.newSession();
+        chatAdapter.clear();
+        chatAdapter.addInfo("Chat baru dimulai ✨\nApa yang ingin kita bangun hari ini?");
+    }
+
+    private void showHistory() {
+        List<SessionStore.Meta> metas = SessionStore.list(this);
+        if (metas.isEmpty()) { toast(getString(R.string.no_sessions)); return; }
+        final List<String> titles = new ArrayList<>();
+        for (SessionStore.Meta m : metas) titles.add(m.title);
+        CharSequence[] arr = titles.toArray(new String[0]);
+        CharSequence[] actions = {"📂 Buka", "🗑️ Hapus", "🗑️ Hapus semua"};
+
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.history)
+                .setItems(arr, (d, w) -> openSession(metas.get(w)))
+                .setNeutralButton("Hapus semua", (d, w) -> {
+                    SessionStore.deleteAll(this);
+                    toast("Semua riwayat dihapus");
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
+    }
+
+    private void openSession(SessionStore.Meta m) {
+        saveCurrentSession();
+        history = SessionStore.loadMessages(this, m.id);
+        sessionId = m.id;
+        chatAdapter.clear();
+        try {
+            for (int i = 0; i < history.length(); i++) {
+                JSONObject o = history.getJSONObject(i);
+                String role = o.optString("role");
+                if ("user".equals(role)) chatAdapter.addUser(o.optString("content"));
+                else if ("assistant".equals(role)) {
+                    String c = o.optString("content");
+                    chatAdapter.addBot(c == null || c.isEmpty() ? "(tool)" : c);
+                }
+            }
+        } catch (Exception ignore) { }
+        showPage(0);
+    }
+
+    private void saveCurrentSession() {
+        if (history.length() > 0) {
+            String title = firstUserText();
+            SessionStore.save(this, sessionId, title, history);
+        }
+    }
+
+    private String firstUserText() {
+        try {
+            for (int i = 0; i < history.length(); i++) {
+                JSONObject o = history.getJSONObject(i);
+                if ("user".equals(o.optString("role"))) {
+                    String t = o.optString("content", "");
+                    return t.length() > 42 ? t.substring(0, 42) + "…" : t;
+                }
+            }
+        } catch (Exception ignore) { }
+        return "Chat " + sessionId;
+    }
+
     /* ================= NAVIGASI ================= */
 
     private void setupNav() {
-        View.OnClickListener[] handlers = new View.OnClickListener[4];
-        handlers[0] = v -> showPage(0);
-        handlers[1] = v -> showPage(1);
-        handlers[2] = v -> showPage(2);
-        handlers[3] = v -> showPage(3);
-        navChat.setOnClickListener(handlers[0]);
-        navFiles.setOnClickListener(handlers[1]);
-        navTodo.setOnClickListener(handlers[2]);
-        navSettings.setOnClickListener(handlers[3]);
+        navChat.setOnClickListener(v -> showPage(0));
+        navFiles.setOnClickListener(v -> showPage(1));
+        navTodo.setOnClickListener(v -> showPage(2));
+        navSettings.setOnClickListener(v -> showPage(3));
         showPage(0);
     }
 
@@ -192,10 +296,12 @@ public class MainActivity extends Activity {
         settingsPage.setVisibility(idx == 3 ? View.VISIBLE : View.GONE);
         String[] titles = {"ZCode", "Berkas", "Tugas", "Setelan"};
         titleText.setText(titles[idx]);
-        navChat.setTextColor(idx == 0 ? Color.parseColor(dark ? "#9F67F5" : "#7C3AED") : Color.parseColor(dark ? "#9A9AAB" : "#6B6B7B"));
-        navFiles.setTextColor(idx == 1 ? Color.parseColor(dark ? "#9F67F5" : "#7C3AED") : Color.parseColor(dark ? "#9A9AAB" : "#6B6B7B"));
-        navTodo.setTextColor(idx == 2 ? Color.parseColor(dark ? "#9F67F5" : "#7C3AED") : Color.parseColor(dark ? "#9A9AAB" : "#6B6B7B"));
-        navSettings.setTextColor(idx == 3 ? Color.parseColor(dark ? "#9F67F5" : "#7C3AED") : Color.parseColor(dark ? "#9A9AAB" : "#6B6B7B"));
+        String active = dark ? "#FAFAFA" : "#0A0A0A";
+        String idle = dark ? "#A3A3A3" : "#737373";
+        navChat.setTextColor(Color.parseColor(idx == 0 ? active : idle));
+        navFiles.setTextColor(Color.parseColor(idx == 1 ? active : idle));
+        navTodo.setTextColor(Color.parseColor(idx == 2 ? active : idle));
+        navSettings.setTextColor(Color.parseColor(idx == 3 ? active : idle));
         if (idx == 1) filesAdapter.load(currentDir);
         if (idx == 2) reloadTodo();
     }
@@ -205,10 +311,21 @@ public class MainActivity extends Activity {
     private void setupChat(final File ws) {
         chatAdapter = new ChatAdapter(this, dark);
         chatList.setAdapter(chatAdapter);
-        chatAdapter.addInfo("Selamat datang di ZCode Mobile! 👋\n"
-                + "Aku agent coding yang jalan sepenuhnya di HP-mu.\n\n"
-                + "Coba: \"buatkan halaman web profil dirimu\" atau \"buat toko mini sederhana\".\n"
-                + "Workspace: " + ws.getPath());
+        chatAdapter.addInfo("Selamat datang di ZCode Mobile ⚡\n"
+                + "Agent coding native di HP-mu, terinspirasi ZCode Desktop.\n\n"
+                + "Coba: \"buatkan halaman web profil\" atau \"buat landing page toko\".\n"
+                + "Tekan lama pesan untuk menyalin • 🕘 untuk riwayat • ＋ untuk chat baru.");
+
+        chatList.setOnItemLongClickListener((p, v, pos, id) -> {
+            String t = chatAdapter.textAt(pos);
+            if (t != null && !t.isEmpty() && !"…".equals(t)) {
+                ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(ClipData.newPlainText("zcode", t));
+                toast(getString(R.string.copied));
+                return true;
+            }
+            return false;
+        });
 
         sendBtn.setOnClickListener(v -> {
             if (agentBusy) {
@@ -241,9 +358,9 @@ public class MainActivity extends Activity {
         } catch (Exception ignore) { }
         chatAdapter.addUser(userText);
         chatAdapter.addTyping();
-        chatList.post(() -> chatList.setSelection(chatAdapter.getCount() - 1));
-        lastBotBuf = new StringBuilder();
+        scrollChat();
         setBusy(true);
+        pendingToolCards.clear();
 
         String baseUrl = Prefs.activeBaseUrl(this);
         String key = Prefs.activeApiKey(this);
@@ -251,28 +368,29 @@ public class MainActivity extends Activity {
         String sys = AgentEngine.buildSystemPrompt(tools.getWorkspace().getPath());
         engine = new AgentEngine(baseUrl, key, model, tools, sys);
 
+        final StringBuilder lastBotBuf = new StringBuilder();
+
         engine.run(history, new AgentEngine.Listener() {
             @Override public void onStreamDelta(String piece) {
                 ui.post(() -> {
                     lastBotBuf.append(piece);
                     chatAdapter.updateLastBot(lastBotBuf.toString());
-                    chatList.post(() -> chatList.setSelection(chatAdapter.getCount() - 1));
+                    scrollChat();
                 });
             }
             @Override public void onToolStart(String name, String argsPreview) {
                 ui.post(() -> {
-                    lastBotBuf.append("\n🛠️ ").append(name).append(" → ").append(argsPreview).append("\n");
-                    chatAdapter.updateLastBot(lastBotBuf.toString());
-                    chatList.post(() -> chatList.setSelection(chatAdapter.getCount() - 1));
+                    pendingToolCards.add(chatAdapter.addTool(name, argsPreview));
+                    scrollChat();
                 });
             }
             @Override public void onToolResult(String name, String resultPreview, boolean ok) {
                 ui.post(() -> {
-                    lastBotBuf.append(ok ? "✅ " : "⚠️ ").append(resultPreview).append("\n");
-                    chatAdapter.updateLastBot(lastBotBuf.toString());
+                    int pos = pendingToolCards.isEmpty() ? -1 : pendingToolCards.remove(0);
+                    chatAdapter.updateTool(pos, name + " → " + resultPreview, ok);
                     if ("todo_write".equals(name)) reloadTodo();
                     if ("write_file".equals(name) || "delete_path".equals(name)) filesAdapter.load(currentDir);
-                    chatList.post(() -> chatList.setSelection(chatAdapter.getCount() - 1));
+                    scrollChat();
                 });
             }
             @Override public void onAssistantDone(String fullText) {
@@ -282,7 +400,8 @@ public class MainActivity extends Activity {
                     catch (Exception ignore) { }
                     chatAdapter.updateLastBot(clean);
                     setBusy(false);
-                    chatList.post(() -> chatList.setSelection(chatAdapter.getCount() - 1));
+                    saveCurrentSession();
+                    scrollChat();
                 });
             }
             @Override public void onError(String message) {
@@ -291,8 +410,12 @@ public class MainActivity extends Activity {
                     setBusy(false);
                 });
             }
-            @Override public void onRound(int round) { /* info ronde: diamkan agar bersih */ }
+            @Override public void onRound(int round) { }
         });
+    }
+
+    private void scrollChat() {
+        chatList.post(() -> chatList.setSelection(chatAdapter.getCount() - 1));
     }
 
     /* ================= BERKAS ================= */
@@ -305,13 +428,17 @@ public class MainActivity extends Activity {
         filesAdapter.load(ws);
 
         filesAdapter.setListener(new FilesAdapter.Listener() {
-            @Override public void onOpenFile(File f) { openEditor(f); }
+            @Override public void onOpenFile(File f) {
+                String n = f.getName().toLowerCase();
+                if (n.endsWith(".html") || n.endsWith(".htm")) fileOptions(f);
+                else openEditor(f);
+            }
             @Override public void onOpenFolder(File f) {
                 currentDir = f;
                 pathText.setText(shownPath(f));
                 filesAdapter.load(f);
             }
-            @Override public void onMore(File f) { fileMenu(f); }
+            @Override public void onMore(File f) { fileOptions(f); }
         });
 
         findViewById(R.id.upBtn).setOnClickListener(v -> {
@@ -364,12 +491,21 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    private void fileMenu(final File f) {
-        CharSequence[] opts = {getString(R.string.rename), getString(R.string.delete)};
+    private void fileOptions(final File f) {
+        boolean html = f.getName().toLowerCase().endsWith(".html") || f.getName().toLowerCase().endsWith(".htm");
+        List<String> opts = new ArrayList<>();
+        if (html) opts.add(getString(R.string.preview));
+        opts.add(getString(R.string.open_editor));
+        opts.add(getString(R.string.rename));
+        opts.add(getString(R.string.delete));
+        CharSequence[] arr = opts.toArray(new CharSequence[0]);
         new AlertDialog.Builder(this)
                 .setTitle(f.getName())
-                .setItems(opts, (d, w) -> {
-                    if (w == 0) {
+                .setItems(arr, (d, w) -> {
+                    String chosen = opts.get(w);
+                    if (chosen.equals(getString(R.string.preview))) showPreview(f);
+                    else if (chosen.equals(getString(R.string.open_editor))) openEditor(f);
+                    else if (chosen.equals(getString(R.string.rename))) {
                         askName("Ganti nama", f.getName(), n -> {
                             File nf = new File(f.getParentFile(), n);
                             if (f.renameTo(nf)) filesAdapter.load(currentDir);
@@ -389,6 +525,22 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    /** Pratinjau HTML di WebView (ala artifact preview ZCode Desktop). */
+    private void showPreview(File f) {
+        WebView wv = new WebView(this);
+        wv.getSettings().setJavaScriptEnabled(true);
+        wv.loadUrl("file://" + f.getAbsolutePath());
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(wv, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(420)));
+        new AlertDialog.Builder(this)
+                .setTitle("👁 " + f.getName())
+                .setView(box)
+                .setPositiveButton(R.string.cancel, null)
+                .show();
+    }
+
     private void deleteRecursive(File f) {
         if (f.isDirectory()) {
             File[] kids = f.listFiles();
@@ -402,7 +554,7 @@ public class MainActivity extends Activity {
         et.setTypeface(Typeface.MONOSPACE);
         et.setTextSize(13f);
         et.setMinLines(8);
-        et.setGravity(Gravity.TOP);
+        et.setGravity(android.view.Gravity.TOP);
         try {
             byte[] b = Files.readAllBytes(f.toPath());
             et.setText(new String(b, StandardCharsets.UTF_8));
@@ -496,8 +648,6 @@ public class MainActivity extends Activity {
             LlmClient.testConnection(bu, key, (ok, msg) -> ui.post(() ->
                     testResult.setText(ok ? "✅ " + msg : "❌ " + msg)));
         });
-
-        findViewById(R.id.settingsPage).setOnTouchListener(null);
     }
 
     private void saveSettings() {
@@ -508,17 +658,19 @@ public class MainActivity extends Activity {
         } else {
             Prefs.set(this, "zai_api_key", apiKeyInput.getText().toString().trim());
         }
+        Object sel = modelSpinner.getSelectedItem();
+        if (sel != null) {
+            String m = sel.toString();
+            if (!m.isEmpty() && !m.startsWith("(") && !m.startsWith("⚠"))
+                Prefs.set(this, "model_" + type, m);
+        }
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         saveSettings();
-        Object sel = modelSpinner.getSelectedItem();
-        if (sel != null) {
-            String m = sel.toString();
-            if (!m.isEmpty()) Prefs.set(this, "model_" + Prefs.get(this, "provider_type", "zai"), m);
-        }
+        saveCurrentSession();
     }
 
     /** Isi spinner model. Untuk custom → fetch /models. cb null = senyap. */
@@ -541,6 +693,10 @@ public class MainActivity extends Activity {
                         modelIds.clear();
                         modelIds.addAll(ids);
                         if (modelIds.isEmpty()) modelIds.add("(tidak ada model)");
+                        // simpan utk model picker header
+                        JSONArray arr = new JSONArray();
+                        for (String id : ids) arr.put(id);
+                        Prefs.set(MainActivity.this, "custom_models", arr.toString());
                         modelAdapter.notifyDataSetChanged();
                         selectSavedModel();
                         if (done != null) done.run();
@@ -580,10 +736,10 @@ public class MainActivity extends Activity {
         try {
             String html = "<!DOCTYPE html>\n<html lang=\"id\">\n<head>\n<meta charset=\"utf-8\">\n"
                     + "<title>Halo dari ZCode Mobile</title>\n"
-                    + "<style>body{font-family:sans-serif;background:#7C3AED;color:#fff;"
+                    + "<style>body{font-family:sans-serif;background:#0a0a0a;color:#fafafa;"
                     + "display:flex;align-items:center;justify-content:center;height:100vh;margin:0}\n"
-                    + "h1{font-size:2em}p{opacity:.85}</style>\n</head>\n<body>\n<div style=\"text-align:center\">\n"
-                    + "<h1>⚡ ZCode Mobile</h1>\n<p>Berkas pertamamu. Minta agent mengubahnya!</p>\n</div>\n"
+                    + "h1{font-size:2em;font-style:italic}p{opacity:.6}</style>\n</head>\n<body>\n<div style=\"text-align:center\">\n"
+                    + "<h1>Z</h1>\n<p>ZCode Mobile — berkas pertamamu.<br>Minta agent mengubahnya!</p>\n</div>\n"
                     + "</body>\n</html>\n";
             FileOutputStream fos = new FileOutputStream(hello);
             fos.write(html.getBytes(StandardCharsets.UTF_8));

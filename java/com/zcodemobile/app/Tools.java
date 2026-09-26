@@ -4,6 +4,7 @@ import android.content.Context;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -52,6 +53,8 @@ public class Tools {
         arr.put(tool("todo_write", "Simpan/ubah daftar tugas rencana kerja",
                 arr_("items", "Daftar tugas", str("title", "Judul tugas"),
                         bool("done", "Selesai?"))));
+        arr.put(tool("web_fetch", "Ambil isi halaman web (teks) dari URL",
+                str("url", "URL lengkap https://…")));
         return arr;
     }
 
@@ -116,6 +119,7 @@ public class Tools {
                 case "grep": return doGrep(args);
                 case "delete_path": return doDelete(args);
                 case "todo_write": return doTodo(args, appCtx);
+                case "web_fetch": return doWebFetch(args);
                 default: return "Error: tool tidak dikenal: " + name;
             }
         } catch (Exception e) {
@@ -220,5 +224,34 @@ public class Tools {
         if (items == null) return "Error: items wajib array";
         TodoStore.save(ctx, items);
         return "OK — " + items.length() + " tugas tersimpan";
+    }
+
+    private String doWebFetch(JSONObject a) {
+        String url = a.optString("url", "").trim();
+        if (url.isEmpty()) return "Error: url kosong";
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return "Error: url harus http(s)";
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new java.net.URL(url).openConnection();
+            conn.setConnectTimeout(12000);
+            conn.setReadTimeout(20000);
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (ZCodeMobile)");
+            int code = conn.getResponseCode();
+            java.io.InputStream is = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
+            if (is == null) return "Error: HTTP " + code;
+            String html = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            // buang script/style/tag
+            html = html.replaceAll("(?is)<(script|style)[^>]*>.*?</\\1>", " ")
+                       .replaceAll("(?s)<[^>]+>", " ")
+                       .replaceAll("&nbsp;", " ").replaceAll("&amp;", "&")
+                       .replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&quot;", "\"")
+                       .replaceAll("\\s+", " ").trim();
+            if (html.length() > 4000) html = html.substring(0, 4000) + "…(dipotong)";
+            return "HTTP " + code + " — isi:\n" + html;
+        } catch (Exception e) {
+            return "Error: " + e.getClass().getSimpleName() + " - " + e.getMessage();
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
     }
 }

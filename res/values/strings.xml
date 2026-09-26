@@ -30,4 +30,13 @@
     <string name="agent_tool">🛠️ Tool: %1$s</string>
     <string name="error_no_key">API key belum diisi. Buka tab Setelan.</string>
     <string name="stop">Stop</string>
+    <string name="history">Riwayat</string>
+    <string name="new_chat">Chat baru</string>
+    <string name="preview">Pratinjau</string>
+    <string name="open_editor">Editor</string>
+    <string name="copy">Salin</string>
+    <string name="copied">Tersalin ✓</string>
+    <string name="tool_running">menjalankan…</string>
+    <string name="no_sessions">Belum ada riwayat chat.</string>
+    <string name="pick_model">Pilih model</string>
 </resources>

@@ -56,13 +56,13 @@ echo "▶ [6/7] zipalign..."
 "$BT/zipalign" -f 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 
 echo "▶ [7/7] apksigner sign..."
-if [ ! -f "$OUT/zcode.keystore" ]; then
-  keytool -genkeypair -keystore "$OUT/zcode.keystore" -alias zcode \
+if [ ! -f "$ROOT/zcode.keystore" ]; then
+  keytool -genkeypair -keystore "$ROOT/zcode.keystore" -alias zcode \
     -keyalg RSA -keysize 2048 -validity 10000 \
     -storepass zcodemobile -keypass zcodemobile \
     -dname "CN=ZCode Mobile, OU=Dev, O=ZCodeMobile, C=ID"
 fi
-"$BT/apksigner" sign --ks "$OUT/zcode.keystore" \
+"$BT/apksigner" sign --ks "$ROOT/zcode.keystore" \
   --ks-pass pass:zcodemobile --key-pass pass:zcodemobile \
   --out "$OUT/ZCodeMobile.apk" "$OUT/aligned.apk"
 
