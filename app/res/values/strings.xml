@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ZCode Mobile</string>
+    <string name="tab_chat">Chat</string>
+    <string name="tab_files">Berkas</string>
+    <string name="tab_todo">Tugas</string>
+    <string name="tab_settings">Setelan</string>
+    <string name="hint_message">Tanya apa saja ke ZCode…</string>
+    <string name="send">Kirim</string>
+    <string name="settings_provider">Penyedia AI</string>
+    <string name="settings_provider_zai">Z.ai (resmi, model gratis)</string>
+    <string name="settings_provider_custom">Kustom (OpenAI-compatible)</string>
+    <string name="settings_api_key">API Key</string>
+    <string name="settings_base_url">Base URL</string>
+    <string name="settings_model">Model</string>
+    <string name="settings_refresh_models">Muat ulang daftar model</string>
+    <string name="settings_theme">Tema</string>
+    <string name="settings_test">Uji Koneksi</string>
+    <string name="settings_get_key">Dapatkan API key di z.ai → manage-apikey</string>
+    <string name="todo_add_hint">Tugas baru…</string>
+    <string name="todo_add">Tambah</string>
+    <string name="files_new_file">Berkas baru</string>
+    <string name="files_new_folder">Folder baru</string>
+    <string name="files_empty">Workspace kosong. Buat berkas baru atau minta agent menulis kode untukmu.</string>
+    <string name="save">Simpan</string>
+    <string name="delete">Hapus</string>
+    <string name="cancel">Batal</string>
+    <string name="rename">Ganti nama</string>
+    <string name="agent_thinking">ZCode sedang berpikir…</string>
+    <string name="agent_tool">🛠️ Tool: %1$s</string>
+    <string name="error_no_key">API key belum diisi. Buka tab Setelan.</string>
+    <string name="stop">Stop</string>
+    <string name="history">Riwayat</string>
+    <string name="new_chat">Chat baru</string>
+    <string name="preview">Pratinjau</string>
+    <string name="open_editor">Editor</string>
+    <string name="copy">Salin</string>
+    <string name="copied">Tersalin ✓</string>
+    <string name="tool_running">menjalankan…</string>
+    <string name="no_sessions">Belum ada riwayat chat.</string>
+    <string name="pick_model">Pilih model</string>
+</resources>

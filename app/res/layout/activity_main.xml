@@ -1,0 +1,1053 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- ============================ KONTEN UTAMA ============================ -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="?attr/cBg">
+
+        <!-- HEADER 48dp ala ZCode -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="?attr/cHeader"
+            android:paddingStart="4dp"
+            android:paddingEnd="6dp">
+
+            <ImageButton
+                android:id="@+id/btnMenu"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_panel"
+                android:tint="?attr/cFgSubtle"
+                android:contentDescription="Buka panel tugas"/>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="2dp"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/txtWsName"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="?attr/cFg"
+                    android:maxLines="1"
+                    android:ellipsize="end"
+                    android:text="workspace"/>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="10sp"
+                    android:textColor="?attr/cFgSubtlest"
+                    android:text="ZCode · Agent"/>
+            </LinearLayout>
+
+            <!-- Model chip -->
+            <LinearLayout
+                android:id="@+id/btnModel"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/bg_chip"
+                android:paddingStart="10dp"
+                android:paddingEnd="8dp">
+
+                <ImageView
+                    android:layout_width="13dp"
+                    android:layout_height="13dp"
+                    android:src="@drawable/ic_cpu"
+                    android:tint="?attr/cFgSubtle"/>
+
+                <TextView
+                    android:id="@+id/txtModel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="5dp"
+                    android:textSize="12sp"
+                    android:textColor="?attr/cFg"
+                    android:maxLines="1"
+                    android:maxWidth="118sp"
+                    android:ellipsize="end"
+                    android:text="model"/>
+
+                <ImageView
+                    android:layout_width="13dp"
+                    android:layout_height="13dp"
+                    android:layout_marginStart="3dp"
+                    android:src="@drawable/ic_chevron_down"
+                    android:tint="?attr/cFgSubtlest"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?attr/cBorder"/>
+
+        <!-- STRIP STATUS AGENT -->
+        <LinearLayout
+            android:id="@+id/statusStrip"
+            android:layout_width="match_parent"
+            android:layout_height="34dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="?attr/cSurface"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:visibility="gone">
+
+            <ProgressBar
+                android:layout_width="14dp"
+                android:layout_height="14dp"
+                style="?android:attr/progressBarStyleSmallTitle"/>
+
+            <TextView
+                android:id="@+id/txtStatus"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:textSize="12sp"
+                android:textColor="?attr/cFgSubtle"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:text="Bekerja…"/>
+
+            <TextView
+                android:id="@+id/txtTokens"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="11sp"
+                android:textColor="?attr/cFgSubtlest"
+                android:text=""/>
+        </LinearLayout>
+
+        <!-- HALAMAN -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <!-- ===== HALAMAN SETTINGS ===== -->
+            <ScrollView
+                android:id="@+id/pageSettings"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="PENAMPILAN"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:textColor="?attr/cFgSubtlest"
+                        android:letterSpacing="0.08"/>
+
+                    <RadioGroup
+                        android:id="@+id/rgTheme"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:background="@drawable/bg_tool_card"
+                        android:padding="6dp"
+                        android:orientation="vertical">
+
+                        <RadioButton
+                            android:id="@+id/rbLight"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:minHeight="42dp"
+                            android:text="Terang (default)"
+                            android:textSize="14sp"
+                            android:textColor="?attr/cFg"
+                            android:checked="true"
+                            android:buttonTint="?attr/cFg"/>
+
+                        <RadioButton
+                            android:id="@+id/rbDark"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:minHeight="42dp"
+                            android:text="Gelap"
+                            android:textSize="14sp"
+                            android:textColor="?attr/cFg"
+                            android:buttonTint="?attr/cFg"/>
+
+                        <RadioButton
+                            android:id="@+id/rbSystem"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:minHeight="42dp"
+                            android:text="Ikuti sistem"
+                            android:textSize="14sp"
+                            android:textColor="?attr/cFg"
+                            android:buttonTint="?attr/cFg"/>
+                    </RadioGroup>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:text="PENYEDIA MODEL"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:textColor="?attr/cFgSubtlest"
+                        android:letterSpacing="0.08"/>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:orientation="vertical"
+                        android:background="@drawable/bg_tool_card"
+                        android:padding="12dp">
+
+                        <RadioGroup
+                            android:id="@+id/rgProvider"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical">
+
+                            <RadioButton
+                                android:id="@+id/rbZai"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:minHeight="40dp"
+                                android:text="Z.ai · GLM (gratis tersedia)"
+                                android:textSize="14sp"
+                                android:textColor="?attr/cFg"
+                                android:checked="true"
+                                android:buttonTint="?attr/cFg"/>
+
+                            <RadioButton
+                                android:id="@+id/rbCustom"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:minHeight="40dp"
+                                android:text="Penyedia kustom (BYOK)"
+                                android:textSize="14sp"
+                                android:textColor="?attr/cFg"
+                                android:buttonTint="?attr/cFg"/>
+                        </RadioGroup>
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="API Key"
+                            android:textSize="12sp"
+                            android:textColor="?attr/cFgSubtle"/>
+
+                        <EditText
+                            android:id="@+id/etApiKey"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:minHeight="42dp"
+                            android:layout_marginTop="4dp"
+                            android:background="@drawable/bg_search"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:textSize="13sp"
+                            android:textColor="?attr/cFg"
+                            android:textColorHint="?attr/cFgSubtlest"
+                            android:hint="tempel API key di sini"
+                            android:inputType="text"
+                            android:maxLines="1"/>
+
+                        <TextView
+                            android:id="@+id/lblBaseUrl"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="Base URL (OpenAI-compatible)"
+                            android:textSize="12sp"
+                            android:textColor="?attr/cFgSubtle"
+                            android:visibility="gone"/>
+
+                        <EditText
+                            android:id="@+id/etBaseUrl"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:minHeight="42dp"
+                            android:layout_marginTop="4dp"
+                            android:background="@drawable/bg_search"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:textSize="13sp"
+                            android:textColor="?attr/cFg"
+                            android:textColorHint="?attr/cFgSubtlest"
+                            android:hint="https://…/v1"
+                            android:inputType="textUri"
+                            android:maxLines="1"
+                            android:visibility="gone"/>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <TextView
+                                android:id="@+id/btnPickModel"
+                                android:layout_width="wrap_content"
+                                android:layout_height="34dp"
+                                android:gravity="center"
+                                android:background="@drawable/bg_chip"
+                                android:paddingStart="14dp"
+                                android:paddingEnd="14dp"
+                                android:text="Pilih Model"
+                                android:textSize="13sp"
+                                android:textColor="?attr/cFg"/>
+
+                            <TextView
+                                android:id="@+id/txtSelModel"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:layout_marginStart="10dp"
+                                android:textSize="12sp"
+                                android:textColor="?attr/cFgSubtle"
+                                android:maxLines="1"
+                                android:ellipsize="end"/>
+                        </LinearLayout>
+
+                        <TextView
+                            android:id="@+id/btnTest"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginTop="10dp"
+                            android:gravity="center"
+                            android:background="@drawable/bg_chip"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="Uji Koneksi"
+                            android:textSize="13sp"
+                            android:textColor="?attr/cFg"/>
+
+                        <TextView
+                            android:id="@+id/txtTest"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:textSize="12sp"
+                            android:textColor="?attr/cFgSubtle"/>
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:text="TENTANG"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:textColor="?attr/cFgSubtlest"
+                        android:letterSpacing="0.08"/>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:orientation="vertical"
+                        android:background="@drawable/bg_tool_card"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="ZCode Mobile v2.0.0"
+                            android:textSize="14sp"
+                            android:textStyle="bold"
+                            android:textColor="?attr/cFg"/>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:textSize="12sp"
+                            android:lineSpacingExtra="3dp"
+                            android:textColor="?attr/cFgSubtle"
+                            android:text="Porting Android murni (native Java) dari ZCode Desktop v3.14.3. Design system &amp; fitur agent mengikuti aslinya: tool card, mode rencana, AskUserQuestion, todo, sesi tugas. Tanpa WebView, tanpa AndroidX."/>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:textSize="11sp"
+                            android:textColor="?attr/cFgSubtlest"
+                            android:text="Backup: github.com/anztdree/ZCode-Android"/>
+                    </LinearLayout>
+                </LinearLayout>
+            </ScrollView>
+
+            <!-- ===== HALAMAN TODO ===== -->
+            <LinearLayout
+                android:id="@+id/pageTodo"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="8dp"
+                    android:paddingTop="12dp"
+                    android:paddingBottom="6dp">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Todo"
+                        android:textSize="17sp"
+                        android:textStyle="bold"
+                        android:textColor="?attr/cFg"/>
+
+                    <TextView
+                        android:id="@+id/btnClearDone"
+                        android:layout_width="wrap_content"
+                        android:layout_height="32dp"
+                        android:gravity="center"
+                        android:background="@drawable/bg_chip"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:text="Hapus selesai"
+                        android:textSize="12sp"
+                        android:textColor="?attr/cFgSubtle"/>
+                </LinearLayout>
+
+                <ListView
+                    android:id="@+id/todoList"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:divider="@null"
+                    android:cacheColorHint="#00000000"/>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:padding="10dp">
+
+                    <EditText
+                        android:id="@+id/etNewTodo"
+                        android:layout_width="0dp"
+                        android:layout_height="42dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_search"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:textSize="13sp"
+                        android:textColor="?attr/cFg"
+                        android:textColorHint="?attr/cFgSubtlest"
+                        android:hint="Tambah tugas baru…"
+                        android:inputType="text"
+                        android:maxLines="1"
+                        android:imeOptions="actionDone"/>
+
+                    <ImageButton
+                        android:id="@+id/btnAddTodo"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:layout_marginStart="8dp"
+                        android:background="@drawable/bg_send"
+                        android:src="@drawable/ic_plus"
+                        android:tint="?attr/cBrandFg"
+                        android:contentDescription="Tambah"/>
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- ===== HALAMAN BERKAS ===== -->
+            <LinearLayout
+                android:id="@+id/pageFiles"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="8dp"
+                    android:paddingTop="12dp"
+                    android:paddingBottom="6dp">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Berkas"
+                        android:textSize="17sp"
+                        android:textStyle="bold"
+                        android:textColor="?attr/cFg"/>
+
+                    <ImageButton
+                        android:id="@+id/btnRefreshFiles"
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:background="?android:attr/selectableItemBackgroundBorderless"
+                        android:src="@drawable/ic_refresh"
+                        android:tint="?attr/cFgSubtle"
+                        android:contentDescription="Segarkan"/>
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/txtFilesPath"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="8dp"
+                    android:textSize="11sp"
+                    android:textColor="?attr/cFgSubtlest"
+                    android:singleLine="true"
+                    android:ellipsize="start"/>
+
+                <ListView
+                    android:id="@+id/fileList"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:divider="@null"
+                    android:cacheColorHint="#00000000"/>
+            </LinearLayout>
+
+            <!-- ===== HALAMAN CHAT (default) ===== -->
+            <LinearLayout
+                android:id="@+id/pageChat"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical">
+
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1">
+
+                    <!-- Empty state ala ZCode -->
+                    <LinearLayout
+                        android:id="@+id/emptyState"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:orientation="vertical"
+                        android:gravity="center"
+                        android:padding="24dp"
+                        android:visibility="gone">
+
+                        <FrameLayout
+                            android:layout_width="92dp"
+                            android:layout_height="92dp"
+                            android:background="@drawable/bg_empty_logo">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_gravity="center"
+                                android:text="Z"
+                                android:textSize="42sp"
+                                android:textStyle="bold"
+                                android:textColor="#FFFFFF"/>
+                        </FrameLayout>
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="20dp"
+                            android:text="Mulai percakapan"
+                            android:textSize="18sp"
+                            android:textStyle="bold"
+                            android:textColor="?attr/cFg"/>
+
+                        <TextView
+                            android:id="@+id/txtGreeting"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:textSize="13sp"
+                            android:textColor="?attr/cFgSubtle"
+                            android:text="Pagi, ada yang bisa saya bantu?"/>
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="18dp"
+                            android:text="Coba mulai dengan"
+                            android:textSize="12sp"
+                            android:textColor="?attr/cFgSubtlest"/>
+
+                        <HorizontalScrollView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:scrollbars="none">
+
+                            <LinearLayout
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal">
+
+                                <TextView
+                                    android:id="@+id/sug1"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="36dp"
+                                    android:gravity="center"
+                                    android:background="@drawable/bg_chip"
+                                    android:paddingStart="14dp"
+                                    android:paddingEnd="14dp"
+                                    android:text="Buat aplikasi kalkulator"
+                                    android:textSize="13sp"
+                                    android:textColor="?attr/cFg"/>
+
+                                <TextView
+                                    android:id="@+id/sug2"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="36dp"
+                                    android:layout_marginStart="8dp"
+                                    android:gravity="center"
+                                    android:background="@drawable/bg_chip"
+                                    android:paddingStart="14dp"
+                                    android:paddingEnd="14dp"
+                                    android:text="Web portofolio"
+                                    android:textSize="13sp"
+                                    android:textColor="?attr/cFg"/>
+
+                                <TextView
+                                    android:id="@+id/sug3"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="36dp"
+                                    android:layout_marginStart="8dp"
+                                    android:gravity="center"
+                                    android:background="@drawable/bg_chip"
+                                    android:paddingStart="14dp"
+                                    android:paddingEnd="14dp"
+                                    android:text="Jelaskan workspace saya"
+                                    android:textSize="13sp"
+                                    android:textColor="?attr/cFg"/>
+
+                                <TextView
+                                    android:id="@+id/sug4"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="36dp"
+                                    android:layout_marginStart="8dp"
+                                    android:gravity="center"
+                                    android:background="@drawable/bg_chip"
+                                    android:paddingStart="14dp"
+                                    android:paddingEnd="14dp"
+                                    android:text="Perbaiki &amp; rapikan kode"
+                                    android:textSize="13sp"
+                                    android:textColor="?attr/cFg"/>
+                            </LinearLayout>
+                        </HorizontalScrollView>
+                    </LinearLayout>
+
+                    <ListView
+                        android:id="@+id/chatList"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:divider="@null"
+                        android:dividerHeight="0dp"
+                        android:cacheColorHint="#00000000"
+                        android:stackFromBottom="false"
+                        android:transcriptMode="disabled"
+                        android:paddingBottom="6dp"
+                        android:scrollbars="none"
+                        android:clipToPadding="false"/>
+                </FrameLayout>
+
+                <!-- COMPOSER ala ZCode (rounded-2xl) -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="8dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:background="@drawable/bg_composer"
+                        android:padding="10dp">
+
+                        <EditText
+                            android:id="@+id/etInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:background="@null"
+                            android:textSize="15sp"
+                            android:lineSpacingExtra="2dp"
+                            android:textColor="?attr/cFg"
+                            android:textColorHint="?attr/cFgSubtlest"
+                            android:hint="Tanya apa saja ke ZCode…"
+                            android:inputType="textMultiLine|textCapSentences"
+                            android:maxLines="6"
+                            android:minLines="1"/>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <LinearLayout
+                                android:id="@+id/btnMode"
+                                android:layout_width="wrap_content"
+                                android:layout_height="30dp"
+                                android:orientation="horizontal"
+                                android:gravity="center_vertical"
+                                android:background="@drawable/bg_chip"
+                                android:paddingStart="10dp"
+                                android:paddingEnd="10dp">
+
+                                <ImageView
+                                    android:id="@+id/imgMode"
+                                    android:layout_width="13dp"
+                                    android:layout_height="13dp"
+                                    android:src="@drawable/ic_target"
+                                    android:tint="?attr/cFgSubtle"/>
+
+                                <TextView
+                                    android:id="@+id/txtMode"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="6dp"
+                                    android:textSize="12sp"
+                                    android:textColor="?attr/cFg"
+                                    android:text="Tanya dulu"/>
+                            </LinearLayout>
+
+                            <Space
+                                android:layout_width="0dp"
+                                android:layout_height="1dp"
+                                android:layout_weight="1"/>
+
+                            <ImageButton
+                                android:id="@+id/btnAttach"
+                                android:layout_width="36dp"
+                                android:layout_height="36dp"
+                                android:background="?android:attr/selectableItemBackgroundBorderless"
+                                android:src="@drawable/ic_paperclip"
+                                android:tint="?attr/cFgSubtle"
+                                android:contentDescription="Lampirkan berkas"/>
+
+                            <ImageButton
+                                android:id="@+id/btnSend"
+                                android:layout_width="36dp"
+                                android:layout_height="36dp"
+                                android:layout_marginStart="2dp"
+                                android:background="@drawable/bg_send"
+                                android:src="@drawable/ic_arrow_up"
+                                android:tint="?attr/cBrandFg"
+                                android:contentDescription="Kirim"/>
+                        </LinearLayout>
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+        </FrameLayout>
+
+        <!-- BOTTOM NAV -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?attr/cBorder"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="58dp"
+            android:orientation="horizontal"
+            android:background="?attr/cHeader">
+
+            <LinearLayout
+                android:id="@+id/navChat"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:background="@drawable/bg_selectable">
+
+                <ImageView
+                    android:id="@+id/navChatIcon"
+                    android:layout_width="21dp"
+                    android:layout_height="21dp"
+                    android:src="@drawable/ic_message"
+                    android:tint="?attr/cFg"/>
+
+                <TextView
+                    android:id="@+id/navChatText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:text="Chat"
+                    android:textSize="10sp"
+                    android:textColor="?attr/cFg"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/navFiles"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:background="@drawable/bg_selectable">
+
+                <ImageView
+                    android:id="@+id/navFilesIcon"
+                    android:layout_width="21dp"
+                    android:layout_height="21dp"
+                    android:src="@drawable/ic_files"
+                    android:tint="?attr/cFgSubtle"/>
+
+                <TextView
+                    android:id="@+id/navFilesText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:text="Berkas"
+                    android:textSize="10sp"
+                    android:textColor="?attr/cFgSubtle"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/navTodo"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:background="@drawable/bg_selectable">
+
+                <ImageView
+                    android:id="@+id/navTodoIcon"
+                    android:layout_width="21dp"
+                    android:layout_height="21dp"
+                    android:src="@drawable/ic_list_todo"
+                    android:tint="?attr/cFgSubtle"/>
+
+                <TextView
+                    android:id="@+id/navTodoText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:text="Todo"
+                    android:textSize="10sp"
+                    android:textColor="?attr/cFgSubtle"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/navSettings"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:background="@drawable/bg_selectable">
+
+                <ImageView
+                    android:id="@+id/navSettingsIcon"
+                    android:layout_width="21dp"
+                    android:layout_height="21dp"
+                    android:src="@drawable/ic_settings"
+                    android:tint="?attr/cFgSubtle"/>
+
+                <TextView
+                    android:id="@+id/navSettingsText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="3dp"
+                    android:text="Setelan"
+                    android:textSize="10sp"
+                    android:textColor="?attr/cFgSubtle"/>
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Scrim saat drawer terbuka -->
+    <View
+        android:id="@+id/scrim"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#52000000"
+        android:visibility="gone"/>
+
+    <!-- ============================ SIDEBAR DRAWER (Tasks) ============================ -->
+    <LinearLayout
+        android:id="@+id/drawerPanel"
+        android:layout_width="304dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:orientation="vertical"
+        android:background="?attr/cSidebar"
+        android:clickable="true"
+        android:focusable="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ZCode"
+                android:textSize="22sp"
+                android:textStyle="bold"
+                android:textColor="?attr/cFg"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Asisten coding agent di Android"
+                android:textSize="12sp"
+                android:textColor="?attr/cFgSubtle"/>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/btnNewTask"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:background="@drawable/bg_send">
+
+            <ImageView
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:src="@drawable/ic_message"
+                android:tint="?attr/cBrandFg"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Tugas Baru"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="?attr/cBrandFg"/>
+        </LinearLayout>
+
+        <EditText
+            android:id="@+id/etSessionSearch"
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_search"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:textSize="13sp"
+            android:textColor="?attr/cFg"
+            android:textColorHint="?attr/cFgSubtlest"
+            android:hint="Cari tugas…"
+            android:inputType="text"
+            android:maxLines="1"/>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="4dp"
+            android:text="TERBARU"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:textColor="?attr/cFgSubtlest"
+            android:letterSpacing="0.08"/>
+
+        <ListView
+            android:id="@+id/sessionList"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:divider="@null"
+            android:cacheColorHint="#00000000"/>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?attr/cBorder"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp">
+
+            <LinearLayout
+                android:id="@+id/btnTheme"
+                android:layout_width="0dp"
+                android:layout_height="42dp"
+                android:layout_weight="1"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/bg_selectable"
+                android:paddingStart="8dp">
+
+                <ImageView
+                    android:id="@+id/imgTheme"
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:src="@drawable/ic_sun"
+                    android:tint="?attr/cFgSubtle"/>
+
+                <TextView
+                    android:id="@+id/txtTheme"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:textSize="13sp"
+                    android:textColor="?attr/cFg"
+                    android:text="Tema: Terang"/>
+            </LinearLayout>
+
+            <ImageButton
+                android:id="@+id/btnDrawerSettings"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_settings"
+                android:tint="?attr/cFgSubtle"
+                android:contentDescription="Setelan"/>
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>
