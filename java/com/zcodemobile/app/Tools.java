@@ -292,7 +292,9 @@ public class Tools {
         fos.write(content.getBytes(StandardCharsets.UTF_8));
         fos.close();
         readPaths.add(f.getAbsolutePath());
-        return "File ditulis: " + path + " (" + content.length() + " karakter)";
+        // Diff ala ZCode PC: tampilkan isi baru sbg baris +/- (pratinjau)
+        return "File ditulis: " + path + " (" + content.length() + " karakter)\n\n"
+                + diffPreview(null, content);
     }
 
 
@@ -318,7 +320,32 @@ public class Tools {
         java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
         fos.write(out.getBytes(StandardCharsets.UTF_8));
         fos.close();
-        return "File diedit: " + path;
+        // Diff ala ZCode PC: baris lama (-) vs baru (+) di kartu tool
+        return "File diedit: " + path + "\n\n" + diffPreview(oldS, newS);
+    }
+
+    /**
+     * Pratinjau diff gaya ZCode Desktop: baris "- lama" dan "+ baru",
+     * dibatasi (maks 20 baris per sisi) agar kartu tool tetap ringkas.
+     */
+    private static String diffPreview(String oldS, String newS) {
+        StringBuilder sb = new StringBuilder();
+        String[] oldL = oldS == null ? new String[0] : oldS.replace("\r", "").split("\n", -1);
+        String[] newL = newS == null ? new String[0] : newS.replace("\r", "").split("\n", -1);
+        if (oldL.length > 0 && oldL[oldL.length - 1].isEmpty()) oldL = trimTail(oldL);
+        if (newL.length > 0 && newL[newL.length - 1].isEmpty()) newL = trimTail(newL);
+        final int MAX = 20;
+        for (int i = 0; i < Math.min(MAX, oldL.length); i++) sb.append("- ").append(oldL[i]).append('\n');
+        if (oldL.length > MAX) sb.append("… (-").append(oldL.length - MAX).append(" baris lagi)\n");
+        for (int i = 0; i < Math.min(MAX, newL.length); i++) sb.append("+ ").append(newL[i]).append('\n');
+        if (newL.length > MAX) sb.append("… (+").append(newL.length - MAX).append(" baris lagi)\n");
+        return sb.toString().trim();
+    }
+
+    private static String[] trimTail(String[] a) {
+        String[] r = new String[a.length - 1];
+        System.arraycopy(a, 0, r, 0, r.length);
+        return r;
     }
 
     /* --------------------------------- Glob --------------------------------- */

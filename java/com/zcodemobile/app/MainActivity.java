@@ -93,6 +93,12 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
     private boolean settingsBinding = false;
     private int activePage = 0;
 
+    // Lampiran gambar (vision ala ZCode PC)
+    private LinearLayout attachRow;
+    private TextView txtAttachName;
+    private String pendingImageName = "";
+    private String pendingImageDataUrl = null;
+
     /* =============================== LIFECYCLE =============================== */
 
     @Override
@@ -329,6 +335,9 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         // berwarna langsung NPE begitu halaman Terminal dibuka. Paksa buffer
         // EDITABLE sejak awal (perilaku ini juga diset ulang setiap setText).
         tvTermOut.setText("", TextView.BufferType.EDITABLE);
+        attachRow = findViewById(R.id.attachRow);
+        txtAttachName = findViewById(R.id.txtAttachName);
+        findViewById(R.id.btnAttachRemove).setOnClickListener(v -> clearAttachment());
         File[] wsList = workspace.listFiles();
         txtWsName.setText(workspace.getName() + " · " + (wsList == null ? 0 : wsList.length) + " item");
     }
@@ -514,6 +523,15 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
 
     /* =============================== TERMINAL =============================== */
 
+    // ⚠ Palet terminal TETAP: kotak terminal selalu gelap (#171717) di kedua
+    // tema, maka teksnya WAJIB selalu terang. Memakai ?attr (cCodeFg dsb)
+    // membuat teks gelap di atas kotak gelap saat tema Terang = output
+    // "tidak terlihat" (bug v2.3.1).
+    private static final int TERM_FG     = 0xFFD4D4D4; // output utama
+    private static final int TERM_GREEN  = 0xFF4ADE80; // banner & prompt $
+    private static final int TERM_SUBTLE = 0xFF9CA3AF; // tips/status redup
+    private static final int TERM_RED    = 0xFFFF6B6B; // error / exit != 0
+
     private void termEnsureStarted() {
         if (termShell == null) termShell = new ShellSession(workspace);
         if (!termShell.isAlive() && tvTermOut.length() == 0) {
@@ -523,7 +541,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
             } catch (Exception e) {
                 termBanner(false);
                 termAppend("(gagal menyalakan shell: " + e.getMessage() + ")\n",
-                        col(R.attr.cDestructive));
+                        TERM_RED);
             }
         }
     }
@@ -532,12 +550,12 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         boolean sb = Sandbox.on(this);
         termAppend(sb
                 ? "ZCode Terminal — sandbox Alpine Linux (proot) · proyek = /workspace\n"
-                : "ZCode Terminal — sh (toybox) Android\n", col(R.attr.cSuccess));
+                : "ZCode Terminal — sh (toybox) Android\n", TERM_GREEN);
         if (withTips)
             termAppend(sb
                     ? "Contoh: apk add git python3 · ls -la · df -h — cwd tersimpan antar perintah.\n\n"
                     : "Direktori kerja: workspace proyek. Contoh: ls -la · cat berkas.txt · df -h\n\n",
-                    col(R.attr.cFgSubtlest));
+                    TERM_SUBTLE);
     }
 
     private void termAppend(CharSequence s, int color) {
@@ -585,9 +603,9 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         final boolean sb = Sandbox.on(this);
         final String toRun = sb ? Sandbox.wrap(this, cmd, workspace, 120_000) : cmd;
 
-        termAppend("$ " + cmd + "\n", col(R.attr.cSuccess));
+        termAppend("$ " + cmd + "\n", TERM_GREEN);
         int runStart = tvTermOut.length();
-        termAppend("menjalankan…\n", col(R.attr.cFgSubtlest));
+        termAppend("menjalankan…\n", TERM_SUBTLE);
         termBusy = true;
 
         final ShellSession sh = termShell;
@@ -609,11 +627,11 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
                         if (nl >= runStart && nl + 1 <= e.length())
                             e.delete(runStart, nl + 1);
                     }
-                    termAppend(rr.output, col(R.attr.cCodeFg));
+                    termAppend(rr.output, TERM_FG);
                     if (!rr.ok())
-                        termAppend("\n[exit " + rr.exitCode + "]\n", col(R.attr.cDestructive));
+                        termAppend("\n[exit " + rr.exitCode + "]\n", TERM_RED);
                     else
-                        termAppend("\n", col(R.attr.cCodeFg));
+                        termAppend("\n", TERM_FG);
                 } catch (Throwable ignore) { // jangan biarkan UI thread mati
                 }
                 termBusy = false;
@@ -734,6 +752,12 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
 
     private void send() {
         final String text = etInput.getText().toString().trim();
+        if (text.isEmpty() && pendingImageDataUrl == null) return;
+
+        // Perintah slash ala ZCode PC — dieksekusi lokal, tidak dikirim ke model
+        if (text.startsWith("/")) {
+            if (handleSlash(text)) { etInput.setText(""); return; }
+        }
         if (text.isEmpty()) return;
         etInput.setText("");
         hideKeyboard();
@@ -744,17 +768,30 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
             return;
         }
 
+        final String img = pendingImageDataUrl;
+        final String imgName = pendingImageName;
+        clearAttachment();
+
         ChatItem u = new ChatItem(ChatItem.TYPE_USER);
-        u.text = text;
+        u.text = text + (img != null ? "\n\n🖼 [gambar dilampirkan: " + imgName + "]" : "");
         chatItems.add(u);
         refreshEmptyState();
         chatAdapter.notifyDataSetChanged();
         scrollBottom();
 
-        startEngine(text);
+        startEngine(text, img);
     }
 
-    private void startEngine(String userText) {
+    /** Kosongkan chip lampiran gambar. */
+    private void clearAttachment() {
+        pendingImageDataUrl = null;
+        pendingImageName = "";
+        if (attachRow != null) attachRow.setVisibility(View.GONE);
+    }
+
+    private void startEngine(String userText) { startEngine(userText, null); }
+
+    private void startEngine(String userText, String imageDataUrl) {
         busy = true;
         startedAt = System.currentTimeMillis();
         tokensP = 0; tokensC = 0;
@@ -774,13 +811,140 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         // Judul sesi dari pesan pertama
         String title = null;
         if (chatItems.size() <= 1) {
-            title = userText.length() > 42 ? userText.substring(0, 42) + "…" : userText;
-            if (title.trim().isEmpty()) title = "Tugas baru";
+            if (userText == null || userText.trim().isEmpty()) title = "Analisis gambar";
+            else {
+                title = userText.length() > 42 ? userText.substring(0, 42) + "…" : userText;
+                if (title.trim().isEmpty()) title = "Tugas baru";
+            }
         }
         final String t = title;
-        engine.send(userText);
+        engine.send(userText, imageDataUrl);
         saveSession(t);
         refreshSessions();
+    }
+
+    /* ============================ SLASH COMMANDS ============================ */
+
+    /** Perintah slash ala ZCode PC. Kembalikan true bila teks dikonsumsi. */
+    private boolean handleSlash(String raw) {
+        String[] parts = raw.split("\\s+", 2);
+        String cmd = parts[0].toLowerCase(java.util.Locale.ROOT);
+        switch (cmd) {
+            case "/help": case "/bantuan":
+                showSlashHelp();
+                return true;
+            case "/baru": case "/new":
+                if (busy) { toast("Hentikan agent dulu"); return true; }
+                newTask();
+                return true;
+            case "/bersihkan": case "/clear":
+                if (busy) { toast("Hentikan agent dulu"); return true; }
+                chatItems.clear();
+                engine.replaceHistory(new JSONArray());
+                refreshEmptyState();
+                addNote("🧹 Konteks agent dikosongkan — mulai percakapan baru.");
+                chatAdapter.notifyDataSetChanged();
+                scrollBottom();
+                saveSession(null);
+                return true;
+            case "/ringkas": case "/compact":
+                if (busy) { toast("Hentikan agent dulu"); return true; }
+                engine.compactNow();
+                addNote("📦 Konteks dipadatkan — riwayat lama dibuang agar hemat token.");
+                chatAdapter.notifyDataSetChanged();
+                scrollBottom();
+                return true;
+            case "/model":
+                showModelPicker();
+                return true;
+            case "/mode":
+                showModePicker();
+                return true;
+            case "/init":
+                initAgentsMd();
+                return true;
+            case "/sandbox":
+                showSandboxDialog();
+                return true;
+            case "/setelan": case "/key": case "/api":
+                switchPage(4);
+                return true;
+            case "/terminal":
+                switchPage(2);
+                return true;
+            case "/berkas": case "/files":
+                switchPage(1);
+                return true;
+            default:
+                addNote("Perintah tidak dikenali: " + cmd + " — ketik /help untuk daftar.");
+                chatAdapter.notifyDataSetChanged();
+                scrollBottom();
+                return true;
+        }
+    }
+
+    private void showSlashHelp() {
+        new AlertDialog.Builder(this)
+                .setTitle("Perintah Slash ZCode")
+                .setMessage(
+                        "/help        — daftar perintah\n"
+                      + "/baru        — mulai tugas baru\n"
+                      + "/bersihkan   — kosongkan konteks agent\n"
+                      + "/ringkas     — padatkan konteks (hemat token)\n"
+                      + "/model       — ganti model\n"
+                      + "/mode        — ganti mode agent\n"
+                      + "/init        — buat AGENTS.md (memori proyek)\n"
+                      + "/sandbox     — status Sandbox Linux (proot)\n"
+                      + "/setelan     — buka Setelan / API Key\n"
+                      + "/terminal    — buka Terminal\n"
+                      + "/berkas      — buka halaman Berkas\n\n"
+                      + "Tips: tombol 📎 juga bisa melampirkan GAMBAR\n"
+                      + "(gunakan model vision, mis. glm-4v-flash).")
+                .setPositiveButton("Mengerti", null)
+                .show();
+    }
+
+    /** /init — buat AGENTS.md (memori proyek ala ZCode Desktop). */
+    private void initAgentsMd() {
+        try {
+            File ag = new File(workspace, "AGENTS.md");
+            if (ag.exists()) {
+                addNote("AGENTS.md sudah ada — edit lewat halaman Berkas.");
+                chatAdapter.notifyDataSetChanged();
+                scrollBottom();
+                return;
+            }
+            String tpl = "# Memori Proyek (dibuat oleh /init)\n\n"
+                    + "- Tujuan proyek: \n- Bahasa/framework: \n- Perintah penting: \n- Gaya kode: \n\n"
+                    + "Tuliskan preferensi tetap di sini — ZCode membacanya otomatis tiap ronde.\n";
+            FileOutputStream fo = new FileOutputStream(ag);
+            fo.write(tpl.getBytes(StandardCharsets.UTF_8));
+            fo.close();
+            addNote("📄 AGENTS.md dibuat di workspace — isi preferensi proyek; ZCode membacanya otomatis.");
+            filesAdapter.reload(currentSub);
+            chatAdapter.notifyDataSetChanged();
+            scrollBottom();
+        } catch (Exception e) {
+            toast("Gagal membuat AGENTS.md: " + e.getMessage());
+        }
+    }
+
+    /** /sandbox — dialog status + pintasan ke kartu sandbox. */
+    private void showSandboxDialog() {
+        boolean ready = Sandbox.isReady(this);
+        String msg = ready
+                ? ("Status: " + Sandbox.statusText(this)
+                  + "\n\nBash agent & Terminal berjalan di Alpine Linux dengan akses ke /workspace.")
+                : "Sandbox belum terpasang. Pasang dari kartu Sandbox Linux di halaman Berkas.";
+        new AlertDialog.Builder(this)
+                .setTitle("Sandbox Linux (proot)")
+                .setMessage(msg)
+                .setPositiveButton(ready ? "Buka halaman Berkas" : "Pasang sekarang", (d, w) -> {
+                    switchPage(1);
+                    if (!ready) sandboxInstallStart();
+                })
+                .setNegativeButton("Tutup", null)
+                .show();
     }
 
     private AgentEngine.Callbacks engineCallbacks() {
@@ -1889,9 +2053,16 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_ATTACH && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            final android.net.Uri uri = data.getData();
             try {
-                String name = queryName(data.getData());
-                java.io.InputStream is = getContentResolver().openInputStream(data.getData());
+                String mime = getContentResolver().getType(uri);
+                boolean isImage = (mime != null && mime.startsWith("image/"))
+                        || (mime == null && (uri.getPath() == null || uri.getPath().matches("(?i).*(png|jpe?g|webp|gif|bmp)$")));
+                if (isImage) { handleImageAttach(uri); return; }
+            } catch (Exception ignore) { }
+            try {
+                String name = queryName(uri);
+                java.io.InputStream is = getContentResolver().openInputStream(uri);
                 java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
                 byte[] buf = new byte[8192];
                 int n;
@@ -1910,6 +2081,63 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
                 toast("Gagal membaca lampiran");
             }
         }
+    }
+
+    /**
+     * Lampiran gambar (vision ala ZCode PC): turunkan skala ke sisi maks 768px,
+     * JPEG q82, base64 → data URL — dikirim sebagai content part image_url.
+     */
+    private void handleImageAttach(final android.net.Uri uri) {
+        toast("Menyiapkan gambar…");
+        new Thread(() -> {
+            try {
+                String name = queryName(uri);
+                // 1) ukuran asli
+                android.graphics.BitmapFactory.Options ob = new android.graphics.BitmapFactory.Options();
+                ob.inJustDecodeBounds = true;
+                java.io.InputStream is0 = getContentResolver().openInputStream(uri);
+                android.graphics.BitmapFactory.decodeStream(is0, null, ob);
+                try { is0.close(); } catch (Exception ignore) { }
+                if (ob.outWidth <= 0 || ob.outHeight <= 0) {
+                    ui.post(() -> toast("Berkas gambar tidak valid"));
+                    return;
+                }
+                // 2) sampling awal
+                int sample = 1;
+                while (Math.max(ob.outWidth, ob.outHeight) / (sample * 2) >= 768) sample *= 2;
+                android.graphics.BitmapFactory.Options od = new android.graphics.BitmapFactory.Options();
+                od.inSampleSize = sample;
+                java.io.InputStream is1 = getContentResolver().openInputStream(uri);
+                android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeStream(is1, null, od);
+                try { is1.close(); } catch (Exception ignore) { }
+                if (bmp == null) { ui.post(() -> toast("Gagal membaca gambar")); return; }
+                // 3) skala sisa → maks 768px sisi terpanjang
+                int mw = bmp.getWidth(), mh = bmp.getHeight();
+                int longSide = Math.max(mw, mh);
+                if (longSide > 768) {
+                    float sc = 768f / longSide;
+                    bmp = android.graphics.Bitmap.createScaledBitmap(bmp,
+                            Math.round(mw * sc), Math.round(mh * sc), true);
+                }
+                java.io.ByteArrayOutputStream jb = new java.io.ByteArrayOutputStream();
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, jb);
+                bmp.recycle();
+                final String dataUrl = "data:image/jpeg;base64,"
+                        + android.util.Base64.encodeToString(jb.toByteArray(), android.util.Base64.NO_WRAP);
+                final int kb = jb.size() / 1024;
+                ui.post(() -> {
+                    try {
+                        pendingImageName = (name == null || name.isEmpty()) ? "gambar.jpg" : name;
+                        pendingImageDataUrl = dataUrl;
+                        txtAttachName.setText("🖼 " + pendingImageName + " (" + kb + " KB)");
+                        attachRow.setVisibility(View.VISIBLE);
+                        toast("Gambar siap — tulis pertanyaan lalu kirim");
+                    } catch (Throwable ignore) { }
+                });
+            } catch (Exception e) {
+                ui.post(() -> toast("Gagal menyiapkan gambar: " + e.getMessage()));
+            }
+        }, "img-attach").start();
     }
 
     private String queryName(android.net.Uri uri) {

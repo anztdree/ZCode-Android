@@ -76,14 +76,40 @@ public class AgentEngine {
 
     /** Kirim pesan user & jalankan loop agent. */
     public void send(final String userText) {
+        send(userText, null);
+    }
+
+    /**
+     * Kirim pesan user dengan lampiran gambar opsional (vision, ala ZCode PC).
+     * imageDataUrl = "data:image/jpeg;base64,…" — dibungkus sebagai content
+     * parts OpenAI-compatible: [{type:text},{type:image_url}].
+     */
+    public void send(final String userText, final String imageDataUrl) {
         if (isBusy()) return;
         cancelled = false;
         try {
-            history.put(new JSONObject().put("role", "user").put("content", userText));
+            JSONObject m = new JSONObject().put("role", "user");
+            if (imageDataUrl == null || imageDataUrl.isEmpty()) {
+                m.put("content", userText);
+            } else {
+                JSONArray parts = new JSONArray();
+                parts.put(new JSONObject().put("type", "text")
+                        .put("text", userText == null ? "" : userText));
+                parts.put(new JSONObject().put("type", "image_url")
+                        .put("image_url", new JSONObject().put("url", imageDataUrl)));
+                m.put("content", parts);
+            }
+            history.put(m);
         } catch (Exception ignore) { }
         worker = new Thread(this::runLoop, "agent-loop");
         worker.start();
     }
+
+    /** /ringkas — paksa pemadatan konteks sekarang (ala /compact ZCode PC). */
+    public void compactNow() { trimHistory(); }
+
+    /** /bersihkan — kosongkan konteks agent tanpa matikan aplikasi. */
+    public void clearHistory() { history = new JSONArray(); }
 
     /** Lanjutkan loop setelah plan disetujui (tanpa pesan user baru). */
     public void resumeAfterPlan() {

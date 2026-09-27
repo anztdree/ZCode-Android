@@ -110,7 +110,12 @@ public class ChatAdapter extends BaseAdapter {
 
         if (it.expanded && !it.text.isEmpty()) {
             out.setVisibility(View.VISIBLE);
-            out.setText(it.text.length() > 4000 ? it.text.substring(0, 4000) + "…" : it.text);
+            String body = it.text.length() > 4000 ? it.text.substring(0, 4000) + "…" : it.text;
+            // Diff ala ZCode PC: baris +/- berwarna utk tool Edit/Write
+            if ("Edit".equals(it.toolName) || "Write".equals(it.toolName))
+                out.setText(diffSpanned(body));
+            else
+                out.setText(body);
         } else {
             out.setVisibility(View.GONE);
         }
@@ -140,6 +145,31 @@ public class ChatAdapter extends BaseAdapter {
             reject.setOnClickListener(x -> { if (planListener != null) planListener.onReject(it); });
         }
         return v;
+    }
+
+    /** Spannable diff: baris mulai "+" hijau, "-" merah, sisanya netral. */
+    private CharSequence diffSpanned(String body) {
+        try {
+            android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+            int i = 0;
+            while (i < body.length()) {
+                int nl = body.indexOf('\n', i);
+                if (nl < 0) nl = body.length();
+                String line = body.substring(i, nl);
+                int color = codeFg;
+                if (line.startsWith("+")) color = success;
+                else if (line.startsWith("-")) color = destructive;
+                int start = sb.length();
+                sb.append(line);
+                if (nl < body.length()) sb.append('\n');
+                sb.setSpan(new android.text.style.ForegroundColorSpan(color),
+                        start, sb.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                i = nl + 1;
+            }
+            return sb;
+        } catch (Exception e) {
+            return body;
+        }
     }
 
     public static int iconFor(String tool) {

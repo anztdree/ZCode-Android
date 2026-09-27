@@ -34,8 +34,6 @@ public class Sandbox {
         void onDone(boolean ok, String msg);
     }
 
-    private static final String PROOT_ASSET = "sandbox/proot";
-    private static final String ROOTFS_ASSET = "sandbox/rootfs.tar.gz";
     private static final long MAX_TAR_BYTES = 80L * 1024 * 1024; // pengaman
 
     /* ------------------------------- state ------------------------------- */
@@ -78,25 +76,53 @@ public class Sandbox {
 
     /* --------------------------- pasang / hapus --------------------------- */
 
+    /** Pilih ABI perangkat → nama asset (arm64 | arm | x64). */
+    public static String pickAbi() {
+        try {
+            String[] abis = android.os.Build.SUPPORTED_ABIS;
+            if (abis != null) {
+                for (String a : abis) {
+                    if (a == null) continue;
+                    if (a.startsWith("arm64")) return "arm64";
+                    if (a.startsWith("armeabi")) return "arm";
+                    if (a.contains("x86_64")) return "x64";
+                }
+                for (String a : abis) {
+                    if (a == null) continue;
+                    if (a.contains("x86")) return "x64";
+                }
+            }
+        } catch (Exception ignore) { }
+        return "arm64"; // mayoritas ponsel modern
+    }
+
     public static void install(final Context ctx, final Cb cb) {
         final Context c = ctx.getApplicationContext();
         new Thread(() -> {
+            final StringBuilder log = new StringBuilder("ZCode Mobile — Log Pasang Sandbox\n");
             try {
+                String abi = pickAbi();
+                log.append("ABI: ").append(android.os.Build.SUPPORTED_ABIS != null
+                        ? java.util.Arrays.toString(android.os.Build.SUPPORTED_ABIS) : "?")
+                  .append(" → asset: ").append(abi).append('\n');
+
                 Prefs.set(c, "sb_ready", "0");
                 File sb = sbDir(c);
                 if (!sb.isDirectory() && !sb.mkdirs())
                     throw new Exception("tidak bisa membuat folder sandbox");
-                cb.onProgress("Menyalin binary proot…");
+                cb.onProgress("Menyalin binary proot (" + abi + ")…");
+                log.append("langkah: salin proot_").append(abi).append('\n');
                 File proot = prootBin(c);
-                copyAsset(c, PROOT_ASSET, proot);
+                copyAsset(c, "sandbox/proot_" + abi, proot);
                 if (!proot.setExecutable(true, false))
                     throw new Exception("gagal memberi izin eksekusi pada proot");
 
-                cb.onProgress("Mengekstrak rootfs Alpine (±3,9 MB — sekali saja)…");
+                cb.onProgress("Mengekstrak rootfs Alpine (sekali saja)…");
+                log.append("langkah: ekstrak rootfs_").append(abi).append('\n');
                 File rootfs = rootfsDir(c);
                 if (rootfs.exists()) deleteRecur(rootfs);
                 if (!rootfs.mkdirs()) throw new Exception("tidak bisa membuat folder rootfs");
-                extractTarGz(c.getAssets().open(ROOTFS_ASSET), rootfs, cb);
+                extractTarGz(c.getAssets().open("sandbox/rootfs_" + abi + ".tar.gz"), rootfs, cb);
 
                 cb.onProgress("Menyiapkan konfigurasi jaringan…");
                 writeFile(new File(rootfs, "etc/resolv.conf"),
@@ -107,18 +133,31 @@ public class Sandbox {
                     throw new Exception("tidak bisa membuat folder stage");
 
                 cb.onProgress("Menguji sandbox…");
+                log.append("langkah: uji eksekusi proot\n");
                 String test = wrap(c, "echo zcode-sandbox-ok", c.getFilesDir(), 30_000);
+                log.append("perintah: ").append(test).append('\n');
                 ShellSession.Result r = ShellSession.execOnce(c.getFilesDir(), test, 30_000);
+                log.append("exit=").append(r.exitCode).append(" output=\"").append(r.output).append("\"\n");
                 if (!r.ok() || !r.output.contains("zcode-sandbox-ok"))
-                    throw new Exception("uji eksekusi gagal: " + firstLine(r.output));
+                    throw new Exception("uji eksekusi gagal (exit " + r.exitCode + "): "
+                            + firstLines(r.output, 4));
 
                 Prefs.set(c, "sb_ready", "1");
+                saveLog(c, log.append("HASIL: SUKSES\n").toString());
                 cb.onDone(true, "Sandbox siap — perintah kini berjalan di Alpine Linux");
             } catch (Exception e) {
                 Prefs.set(c, "sb_ready", "0");
+                saveLog(c, log.append("HASIL: GAGAL — ").append(e).append('\n').toString());
                 cb.onDone(false, "Gagal memasang sandbox: " + e.getMessage());
             }
         }, "sb-install").start();
+    }
+
+    /** Simpan log pasang sandbox → files/sandbox-log.txt (bisa dikirim user). */
+    private static void saveLog(Context c, String content) {
+        try {
+            writeFile(new File(c.getFilesDir(), "sandbox-log.txt"), content);
+        } catch (Exception ignore) { }
     }
 
     public static void remove(Context c) {
@@ -134,11 +173,17 @@ public class Sandbox {
         return false;
     }
 
-    private static String firstLine(String s) {
-        if (s == null) return "";
+    /** N baris pertama output (untuk pesan error yang bisa ditindaklanjuti). */
+    private static String firstLines(String s, int max) {
+        if (s == null) return "(kosong)";
         s = s.trim();
-        int nl = s.indexOf('\n');
-        return nl > 0 ? s.substring(0, nl) : s;
+        if (s.isEmpty()) return "(kosong)";
+        String[] lines = s.split("\n");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < Math.min(max, lines.length); i++)
+            sb.append(i > 0 ? " | " : "").append(lines[i].trim());
+        if (sb.length() > 320) sb.setLength(320);
+        return sb.toString();
     }
 
     /* ------------------------- bungkus perintah ------------------------- */
@@ -185,8 +230,13 @@ public class Sandbox {
             long secs = Math.max(15, base / 1000 + 5);
             // `timeout` di host (toybox) menjaga proot tidak jadi proses yatim
             // saat perintah melewati batas waktu.
+            // ⚠ PENTING: penugasan env (PROOT_NO_SECCOMP=1) HARUS di depan —
+            // sebelum `timeout`. Kalau diselipkan setelah `timeout`, toybox
+            // menganggapnya NAMA PROGRAM → "No such file or directory" →
+            // semua perintah sandbox gagal (bug v2.3.1!). Env di depan
+            // diwarisi timeout dan diturunkan ke proot — POSIX benar.
             boolean useTimeout = hasHostTimeout();
-            StringBuilder cmd = new StringBuilder();
+            StringBuilder cmd = new StringBuilder("PROOT_NO_SECCOMP=1 ");
             if (useTimeout) cmd.append("timeout ").append(secs).append(' ');
             cmd.append(shellQ(prootBin(ac).getAbsolutePath()))
                .append(" -0 --kill-on-exit")

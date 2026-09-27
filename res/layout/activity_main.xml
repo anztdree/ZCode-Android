@@ -570,7 +570,7 @@
                         android:fontFamily="monospace"
                         android:textSize="11sp"
                         android:lineSpacingExtra="3dp"
-                        android:textColor="?attr/cCodeFg"
+                        android:textColor="#D4D4D4"
                         android:textIsSelectable="true"/>
                 </ScrollView>
 
@@ -933,10 +933,52 @@
                             android:lineSpacingExtra="2dp"
                             android:textColor="?attr/cFg"
                             android:textColorHint="?attr/cFgSubtlest"
-                            android:hint="Tanya apa saja ke ZCode…"
+                            android:hint="Tanya apa saja ke ZCode… ( / untuk perintah)"
                             android:inputType="textMultiLine|textCapSentences"
                             android:maxLines="6"
                             android:minLines="1"/>
+
+                        <!-- Chip lampiran gambar (vision ala ZCode PC) -->
+                        <LinearLayout
+                            android:id="@+id/attachRow"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:background="@drawable/bg_chip"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="6dp"
+                            android:layout_marginTop="4dp"
+                            android:visibility="gone">
+
+                            <ImageView
+                                android:layout_width="14dp"
+                                android:layout_height="14dp"
+                                android:src="@drawable/ic_paperclip"
+                                android:tint="?attr/cFgSubtle"
+                                android:contentDescription="@null"/>
+
+                            <TextView
+                                android:id="@+id/txtAttachName"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:layout_marginStart="6dp"
+                                android:textSize="12sp"
+                                android:textColor="?attr/cFg"
+                                android:maxLines="1"
+                                android:ellipsize="end"
+                                android:text="gambar.jpg"/>
+
+                            <ImageButton
+                                android:id="@+id/btnAttachRemove"
+                                android:layout_width="28dp"
+                                android:layout_height="28dp"
+                                android:background="?android:attr/selectableItemBackgroundBorderless"
+                                android:src="@drawable/ic_x"
+                                android:tint="?attr/cFgSubtle"
+                                android:contentDescription="Hapus lampiran"/>
+                        </LinearLayout>
 
                         <LinearLayout
                             android:layout_width="match_parent"
