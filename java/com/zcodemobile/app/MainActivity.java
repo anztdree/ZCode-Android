@@ -103,6 +103,10 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         workspace = new File(getFilesDir(), "workspace");
         if (!workspace.exists()) workspace.mkdirs();
 
+        // Logger crash: semua eksepsi tak tertangkap dicatat ke berkas agar bisa
+        // dibagikan untuk diagnosis (tidak mencegah crash, tapi menjelaskannya).
+        installCrashLogger();
+
         md = new MarkdownLite(col(R.attr.cFg), col(R.attr.cFgSubtle), col(R.attr.cFgSubtlest),
                 col(R.attr.cCodeBg), col(R.attr.cCodeFg), col(R.attr.cAsk),
                 code -> {
@@ -294,6 +298,11 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         tvTermOut = findViewById(R.id.tvTermOut);
         etTermInput = findViewById(R.id.etTermInput);
         scrollTerm = findViewById(R.id.scrollTerm);
+        // PERBAIKAN FORCE CLOSE v2.1.0: TextView biasa tidak punya buffer
+        // Editable — getEditableText() mengembalikan null sehingga append teks
+        // berwarna langsung NPE begitu halaman Terminal dibuka. Paksa buffer
+        // EDITABLE sejak awal (perilaku ini juga diset ulang setiap setText).
+        tvTermOut.setText("", TextView.BufferType.EDITABLE);
         txtWsName.setText(workspace.getName() + " · " + workspace.listFiles().length + " item");
     }
 
@@ -409,13 +418,13 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         findViewById(R.id.btnTermHist).setOnClickListener(v -> termHistNext());
         findViewById(R.id.btnTermHist).setOnLongClickListener(v -> { termHistPrev(); return true; });
         findViewById(R.id.btnTermClear).setOnClickListener(v -> {
-            tvTermOut.setText("");
+            tvTermOut.setText("", TextView.BufferType.EDITABLE); // jaga buffer Editable!
             termBanner(false);
         });
         findViewById(R.id.btnTermRestart).setOnClickListener(v -> {
             if (termShell != null) termShell.kill();
             termShell = new ShellSession(workspace);
-            tvTermOut.setText("");
+            tvTermOut.setText("", TextView.BufferType.EDITABLE); // jaga buffer Editable!
             termBanner(true);
             toast("Sesi shell baru dimulai");
         });
@@ -484,14 +493,25 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
     }
 
     private void termAppend(CharSequence s, int color) {
-        android.text.Editable e = tvTermOut.getEditableText();
-        int start = e.length();
-        e.append(s);
-        e.setSpan(new android.text.style.ForegroundColorSpan(color),
-                start, e.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        // Jaga memori: buang awal bila terlalu panjang
-        if (e.length() > 250_000) e.delete(0, e.length() - 250_000);
-        scrollTerm.post(() -> scrollTerm.fullScroll(View.FOCUS_DOWN));
+        try {
+            android.text.Editable e = tvTermOut.getEditableText();
+            if (e == null) {
+                // Fallback: paksa buffer editable lalu lanjut (anti-crash).
+                tvTermOut.setText(tvTermOut.getText(), TextView.BufferType.EDITABLE);
+                e = tvTermOut.getEditableText();
+                if (e == null) return;
+            }
+            int start = e.length();
+            e.append(s);
+            e.setSpan(new android.text.style.ForegroundColorSpan(color),
+                    start, e.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            // Jaga memori: buang awal bila terlalu panjang
+            if (e.length() > 250_000) e.delete(0, e.length() - 250_000);
+            scrollTerm.post(() -> {
+                try { scrollTerm.fullScroll(View.FOCUS_DOWN); } catch (Exception ignore) { }
+            });
+        } catch (Throwable ignore) { // UI tidak boleh mati karena tampilan terminal
+        }
     }
 
     private void bindTermChip(int id) {
@@ -507,7 +527,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         String cmd = etTermInput.getText().toString().trim();
         if (cmd.isEmpty() || termBusy) return;
         etTermInput.setText("");
-        hideKeyboard();
+        hideKeyboardView(etTermInput);
 
         termEnsureStarted();
         termShell.history.add(cmd);
@@ -523,20 +543,27 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
             ShellSession.Result r;
             try {
                 r = sh.run(cmd, 120_000);
-            } catch (Exception e) {
-                r = new ShellSession.Result("(galat: " + e.getMessage() + ")", 1);
+            } catch (Throwable e) { // Throwable agar termBusy selalu pulih
+                r = new ShellSession.Result("(galat: " + e + ")", 1);
             }
             final ShellSession.Result rr = r;
             ui.post(() -> {
-                // Hapus baris "menjalankan…"
-                android.text.Editable e = tvTermOut.getEditableText();
-                int nl = e.toString().indexOf('\n', runStart);
-                if (nl >= 0) e.delete(runStart, Math.min(nl + 1, e.length()));
-                termAppend(rr.output, col(R.attr.cCodeFg));
-                if (!rr.ok())
-                    termAppend("\n[exit " + rr.exitCode + "]\n", col(R.attr.cDestructive));
-                else
-                    termAppend("\n", col(R.attr.cCodeFg));
+                try {
+                    // Hapus baris "menjalankan…" (aman-batas; teks bisa terpotong
+                    // oleh pembersih 250rb karakter di tengah jalan)
+                    android.text.Editable e = tvTermOut.getEditableText();
+                    if (e != null && runStart >= 0 && runStart <= e.length()) {
+                        int nl = e.toString().indexOf('\n', runStart);
+                        if (nl >= runStart && nl + 1 <= e.length())
+                            e.delete(runStart, nl + 1);
+                    }
+                    termAppend(rr.output, col(R.attr.cCodeFg));
+                    if (!rr.ok())
+                        termAppend("\n[exit " + rr.exitCode + "]\n", col(R.attr.cDestructive));
+                    else
+                        termAppend("\n", col(R.attr.cCodeFg));
+                } catch (Throwable ignore) { // jangan biarkan UI thread mati
+                }
                 termBusy = false;
             });
         }, "zcode-term").start();
@@ -781,10 +808,41 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
     }
 
     private void hideKeyboard() {
+        hideKeyboardView(etInput);
+    }
+
+    private void hideKeyboardView(View v) {
         try {
             InputMethodManager im = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-            im.hideSoftInputFromWindow(etInput.getWindowToken(), 0);
+            im.hideSoftInputFromWindow(v.getWindowToken(), 0);
         } catch (Exception ignore) { }
+    }
+
+    /** Catat crash tak tertangkap ke files/crash-log.txt (maks ±40KB terakhir). */
+    private void installCrashLogger() {
+        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
+            try {
+                File f = new File(getFilesDir(), "crash-log.txt");
+                StringBuilder sb = new StringBuilder();
+                sb.append("=== ").append(new java.util.Date())
+                        .append(" thread=").append(t.getName()).append('\n');
+                sb.append(android.util.Log.getStackTraceString(e)).append("\n\n");
+                String old = "";
+                try {
+                    java.io.FileInputStream fi = new java.io.FileInputStream(f);
+                    byte[] b = new byte[40_000];
+                    int n = fi.read(b); fi.close();
+                    if (n > 0) old = new String(b, 0, n, StandardCharsets.UTF_8);
+                } catch (Exception ignore) { }
+                String all = sb.toString() + old;
+                if (all.length() > 40_000) all = all.substring(0, 40_000);
+                java.io.FileOutputStream fo = new java.io.FileOutputStream(f);
+                fo.write(all.getBytes(StandardCharsets.UTF_8));
+                fo.close();
+            } catch (Exception ignore) { }
+            if (prev != null) prev.uncaughtException(t, e);
+        });
     }
 
     private void toast(String s) {

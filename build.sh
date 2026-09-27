@@ -11,6 +11,8 @@ BT="$HOME/android-toolchain/bt/android-14"
 PLATFORM="$HOME/android-toolchain/platforms/android-34/android.jar"
 ECJ="$HOME/android-toolchain/ecj.jar"
 OUT="$ROOT/build-out"
+# runtime library untuk biner build-tools (zipalign dst)
+export LD_LIBRARY_PATH="$BT/lib64:$LD_LIBRARY_PATH"
 
 cd "$ROOT"
 rm -rf "$OUT"; mkdir -p "$OUT/gen" "$OUT/classes" "$OUT/dex"

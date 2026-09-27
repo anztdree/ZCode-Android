@@ -6,7 +6,7 @@ Dibangun tanpa Gradle: `aapt2 → ECJ → d8 → zipalign → apksigner`.
 Dibuat dari **bedah penuh ZCode Desktop v3.14.3** (Electron): design system, tool registry,
 mode agent, prompt, dan alur tool-use disalin sedapat mungkin identik dengan aslinya.
 
-## ✨ Fitur (v2.1.0)
+## ✨ Fitur (v2.2.0)
 
 ### Agent
 - 🤖 **Agent Chat** streaming (SSE) + tool-use loop ala ZCode Desktop (maks 30 ronde)
@@ -27,6 +27,11 @@ mode agent, prompt, dan alur tool-use disalin sedapat mungkin identik dengan asl
 - Riwayat perintah (tombol ↑), chip perintah cepat (`ls -la`, `pwd`, `df -h`, `ps`, …),
   bersihkan layar, sesi baru
 - Output berwarna gaya blok kode ZCode (`$ perintah` hijau, exit code merah)
+- 📜 **Protokol shell kuat ala Kai 9000**: perintah di-stage ke berkas sementara lalu
+  di-`source` (aman multiline/kutip), sentinel nonce via `>&2` (tahan redirect stdout),
+  generation guard anti "stale EOF" antar restart shell
+- 🛡️ **Anti-crash**: buffer Editable dipaksa sejak awal (akar force close v2.1.0),
+  semua operasi UI terminal ber-pelindung try-catch, crash logger ke `crash-log.txt`
 
 ### UI & Data
 - 🎨 **Design system asli ZCode Desktop** (palet `theme-zai-light`/`theme-zai-dark`,
@@ -41,7 +46,7 @@ mode agent, prompt, dan alur tool-use disalin sedapat mungkin identik dengan asl
 - ☀️ Tema **Light default**, 🌙 Dark cadangan · 🇮🇩 UI Bahasa Indonesia
 
 ## 📲 Install APK
-1. Unduh [`out/ZCodeMobile-v2.1.0.apk`](out/ZCodeMobile-v2.1.0.apk) (270 KB)
+1. Unduh [`out/ZCodeMobile-v2.2.0.apk`](out/ZCodeMobile-v2.2.0.apk) (270 KB)
 2. Salin ke HP Android 8.0+
 3. Izinkan **"Install aplikasi dari sumber tidak dikenal"** untuk aplikasi yang dipakai membuka APK
 4. Install & buka **ZCode Mobile** (bisa update langsung dari v1.x — signature sama)
@@ -59,7 +64,7 @@ Pipeline (tanpa Gradle, tanpa root):
 
 ## 🗂️ Struktur
 ```
-AndroidManifest.xml   v2.1.0 — minSdk 26, target 34
+AndroidManifest.xml   v2.2.0 — minSdk 26, target 34
 build.sh              pipeline build manual
 java/com/zcodemobile/app/
   MainActivity.java   nav 5 halaman + drawer + mode + izin + terminal
@@ -82,7 +87,8 @@ out/                  APK rilis ter-signed
 | v1.0.0 | MVP: chat streaming, 7 tools, explorer, todo, setelan, tema |
 | v1.1.0 | Identitas visual ZCode (ikon asli, palet monokrom, tool cards), sesi, pratinjau HTML |
 | v2.0.0 | Penyelarasan total: design system asli, 13 tools ZCode, 4 mode, plan approval, AskUserQuestion, izin per-tool, drawer Tasks |
-| **v2.1.0** | **Terminal + tool Bash (shell persisten ala node-pty), chip perintah cepat, riwayat perintah** |
+| v2.1.0 | Terminal + tool Bash (shell persisten ala node-pty), chip perintah cepat, riwayat perintah |
+| **v2.2.0** | **Perbaikan force close Terminal (buffer Editable) + protokol shell ala Kai 9000 (staging file, sentinel nonce >&2, generation guard) + crash logger** |
 
 ## 🔒 Lisensi & merek
 Proyek pribadi penggemar untuk pengguna Android; "ZCode" adalah merek Z.ai —
