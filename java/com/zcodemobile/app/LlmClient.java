@@ -43,10 +43,10 @@ public class LlmClient {
 
     /** Pesan error ramah + granular ala Kai 9000 (status per kode HTTP). */
     static String friendlyError(int code, String body) {
-        String detail = body == null ? "" : body.trim();
-        if (detail.length() > 160) detail = detail.substring(0, 160) + "…";
+        String detail = sanitizeDetail(body);
         String base;
         switch (code) {
+            case 400: base = "Permintaan ditolak — model mungkin salah / tidak tersedia di akun ini"; break;
             case 401: base = "API Key tidak valid / belum terpasang"; break;
             case 403: base = "Akses ditolak — key belum berhak atau region diblokir"; break;
             case 402: base = "Kuota/kredit penyedia habis"; break;
@@ -55,6 +55,38 @@ public class LlmClient {
             default: base = code >= 500 ? "Server penyedia sedang bermasalah" : "Permintaan gagal"; break;
         }
         return base + " (HTTP " + code + ")" + (detail.isEmpty() ? "" : ": " + detail);
+    }
+
+    /**
+     * Ambil inti pesan error — JANGAN tampilkan body mentah panjang/HTML di
+     * bagian API key (sumber keluhan "Full error"). Coba field JSON
+     * message/error.message, kalau HTML beri pesan singkat.
+     */
+    static String sanitizeDetail(String body) {
+        if (body == null) return "";
+        String b = body.trim();
+        if (b.isEmpty()) return "";
+        try {
+            JSONObject o = new JSONObject(b);
+            JSONObject err = o.optJSONObject("error");
+            String m = null;
+            if (err != null) m = err.optString("message", null);
+            if (m == null || m.isEmpty()) m = o.optString("message", null);
+            if (m == null || m.isEmpty()) {
+                if (err != null) m = err.optString("type", null);
+            }
+            if (m == null || m.isEmpty()) m = o.optString("error", null);
+            if (m != null && !m.isEmpty() && !"{".equals(m.trim())) return cap(m.trim());
+        } catch (Exception ignore) { }
+        String low = b.toLowerCase();
+        if (b.startsWith("<") || low.contains("<html") || low.contains("<!doctype"))
+            return "(respons berupa HTML — Base URL kemungkinan salah)";
+        return cap(b.replace('\n', ' ').replace('\r', ' '));
+    }
+
+    private static String cap(String s) {
+        if (s == null) return "";
+        return s.length() > 200 ? s.substring(0, 200) + "…" : s;
     }
 
     /** Pesan ramah utk eksepsi jaringan. */
@@ -186,7 +218,7 @@ public class LlmClient {
         }, "llm-stream").start();
     }
 
-    /** Ambil daftar model dari endpoint /models (OpenAI-compatible). */
+    /** Ambil daftar model dari endpoint /models (toleran multi-format). */
     public interface ModelsCallback {
         void onModels(List<String> ids);
         void onError(String message);
@@ -196,10 +228,15 @@ public class LlmClient {
         new Thread(() -> {
             HttpURLConnection conn = null;
             try {
+                if (baseUrl == null || baseUrl.trim().isEmpty()) {
+                    cb.onError("Base URL masih kosong — isi dulu di Setelan");
+                    return;
+                }
                 conn = (HttpURLConnection) new URL(baseUrl + "/models").openConnection();
                 conn.setConnectTimeout(15000);
                 conn.setReadTimeout(20000);
-                conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+                if (apiKey != null && !apiKey.isEmpty())
+                    conn.setRequestProperty("Authorization", "Bearer " + apiKey);
                 int code = conn.getResponseCode();
                 InputStream is = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
                 BufferedReader r = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
@@ -207,16 +244,41 @@ public class LlmClient {
                 String ln;
                 while ((ln = r.readLine()) != null) sb.append(ln);
                 if (code >= 400) { cb.onError(friendlyError(code, sb.toString())); return; }
-                JSONObject root = new JSONObject(sb.toString());
-                JSONArray data = root.optJSONArray("data");
+
+                String trimmed = sb.toString().trim();
                 List<String> ids = new ArrayList<>();
-                if (data != null) {
-                    for (int i = 0; i < data.length(); i++) {
-                        String id = data.getJSONObject(i).optString("id", null);
-                        if (id != null) ids.add(id);
+                try {
+                    if (trimmed.startsWith("[")) {
+                        collectIds(new JSONArray(trimmed), ids);
+                    } else {
+                        JSONObject root = new JSONObject(trimmed);
+                        JSONArray data = root.optJSONArray("data");
+                        if (data == null) data = root.optJSONArray("models");
+                        if (data == null) {
+                            JSONObject dObj = root.optJSONObject("data");
+                            if (dObj != null) data = dObj.optJSONArray("models");
+                        }
+                        if (data != null) {
+                            collectIds(data, ids);
+                        } else {
+                            JSONObject err = root.optJSONObject("error");
+                            if (err != null) {
+                                String m = err.optString("message", null);
+                                if (m == null || m.isEmpty()) m = err.optString("type", "penyedia menolak permintaan");
+                                cb.onError("Gagal mengambil model: " + m);
+                                return;
+                            }
+                        }
                     }
+                } catch (Exception pe) {
+                    cb.onError("Respons /models bukan JSON — periksa Base URL (biasanya harus berakhiran /v1)");
+                    return;
                 }
+                // dedupe + urutkan + batasi (penyedia sepele NVIDIA ratusan model)
+                java.util.Set<String> seen = new java.util.LinkedHashSet<>(ids);
+                ids = new ArrayList<>(seen);
                 java.util.Collections.sort(ids);
+                if (ids.size() > 400) ids = ids.subList(0, 400);
                 cb.onModels(ids);
             } catch (Exception e) {
                 cb.onError(friendlyNetworkError(e));
@@ -226,15 +288,43 @@ public class LlmClient {
         }, "fetch-models").start();
     }
 
-    /** Uji koneksi sederhana (non-streaming). */
+    /** Kumpulkan id model dari array: {id}|{name}|{model}|string mentah. */
+    private static void collectIds(JSONArray arr, List<String> out) {
+        for (int i = 0; i < arr.length(); i++) {
+            try {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) {
+                    String s = arr.optString(i, null);
+                    if (s != null && !s.isEmpty()) out.add(s);
+                    continue;
+                }
+                String id = o.optString("id", null);
+                if (id == null || id.isEmpty()) id = o.optString("name", null);
+                if (id == null || id.isEmpty()) id = o.optString("model", null);
+                if (id != null && !id.isEmpty()) out.add(id);
+            } catch (Exception ignore) { }
+        }
+    }
+
+    /** Uji koneksi sederhana (non-streaming) — pakai model aktif penyedia. */
     public interface TestCallback { void onResult(boolean ok, String message); }
 
-    public static void testConnection(String baseUrl, String apiKey, final TestCallback cb) {
+    public static void testConnection(String baseUrl, String apiKey, final String model, final TestCallback cb) {
+        // TANPA model terpilih: cukup cek /models (jangan kirim model ngawur)
+        if (model == null || model.trim().isEmpty()) {
+            fetchModels(baseUrl, apiKey, new ModelsCallback() {
+                @Override public void onModels(List<String> ids) {
+                    cb.onResult(true, "Terhubung — " + ids.size() + " model tersedia (pilih model dulu)");
+                }
+                @Override public void onError(String message) { cb.onResult(false, message); }
+            });
+            return;
+        }
         new Thread(() -> {
             HttpURLConnection conn = null;
             try {
                 JSONObject body = new JSONObject();
-                body.put("model", "glm-4.5-flash");
+                body.put("model", model);
                 JSONArray msgs = new JSONArray();
                 msgs.put(new JSONObject().put("role", "user").put("content", "Balas hanya: OK"));
                 body.put("messages", msgs);
@@ -260,10 +350,13 @@ public class LlmClient {
                 if (code >= 400) {
                     cb.onResult(false, friendlyError(code, sb.toString()));
                 } else {
-                    JSONObject root = new JSONObject(sb.toString());
-                    String content = root.getJSONArray("choices").getJSONObject(0)
-                            .getJSONObject("message").optString("content", "");
-                    cb.onResult(true, "Terhubung! Balasan model: " + content);
+                    String content = "";
+                    try {
+                        content = new JSONObject(sb.toString()).getJSONArray("choices")
+                                .getJSONObject(0).getJSONObject("message").optString("content", "");
+                    } catch (Exception ignore) { }
+                    cb.onResult(true, "Terhubung! Model " + model + " merespons"
+                            + (content.isEmpty() ? "." : ": " + content.trim()));
                 }
             } catch (Exception e) {
                 cb.onResult(false, friendlyNetworkError(e));

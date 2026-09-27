@@ -242,7 +242,7 @@ public class AgentEngine {
             }
             JSONObject sys = new JSONObject()
                     .put("role", "system")
-                    .put("content", buildSystemPrompt(tools.mode, client.model(), tools.getWorkspace()));
+                    .put("content", buildSystemPrompt(tools.mode, client.model(), tools.getWorkspace(), tools.sandboxActive()));
             JSONArray out = new JSONArray();
             out.put(sys);
             for (int i = 0; i < body.length(); i++) out.put(body.get(i));
@@ -319,7 +319,7 @@ public class AgentEngine {
 
     /* ============================ System prompt ============================ */
 
-    public static String buildSystemPrompt(String mode, String model, File workspace) {
+    public static String buildSystemPrompt(String mode, String model, File workspace, boolean sandbox) {
         StringBuilder sb = new StringBuilder();
         sb.append("You are ZCode, an interactive coding agent running on Android (ZCode Mobile). ")
           .append("Help the user with software engineering tasks in their workspace.\n\n");
@@ -350,12 +350,21 @@ public class AgentEngine {
           .append("- Untuk tugas multi-langkah, buat daftar todo terlebih dahulu dan perbarui setiap langkah selesai.\n")
           .append("- At most one item may be in_progress at a time. Send the full list each call.\n\n");
 
-        sb.append("# Lingkungan\n")
-          .append("- Platform: Android. Shell tersedia via tool Bash, tapi binnernya terbatas pada toybox bawaan Android: ls, cat, cp, mv, rm, mkdir, grep, sed, awk, find, df, du, ps, tar, gzip, gunzip, head, tail, wc, sort, uniq, date, echo, ping, wget, sh.\n")
-          .append("- TIDAK ADA: git, curl, python, node, npm, apt, sudo. Jangan mencoba menginstal paket.\n")
-          .append("- Perintah interaktif (top, vim) atau server (httpd, ping tanpa -c) akan mengunci sampai timeout — hindari.\n")
-          .append("- Workspace: ").append(workspace.getAbsolutePath()).append("\n")
-          .append("- Model: ").append(model).append("\n");
+        sb.append("# Lingkungan\n");
+        if (sandbox) {
+            sb.append("- Platform: Android. Perintah Bash berjalan DI DALAM sandbox Alpine Linux (proot) — direktori proyek ter-mount di /workspace (cd /workspace otomatis, cwd tersimpan antar perintah).\n")
+              .append("- Tersedia busybox lengkap (ash, sed, awk, grep, tar, gzip…) dan `apk` — pasang alat sesuai kebutuhan, mis: `apk add git python3 nodejs npm` (butuh internet; paket terpasang TERSIMPAN antar perintah).\n")
+              .append("- Binari Android (pm, am, settings, logcat) TIDAK ada di dalam sandbox — itu host.\n")
+              .append("- Perintah interaktif (top, vim) atau server jangka panjang tetap mengunci sampai timeout — hindari.\n")
+              .append("- Workspace: ").append(workspace.getAbsolutePath()).append(" (di sandbox = /workspace)\n")
+              .append("- Model: ").append(model).append("\n");
+        } else {
+            sb.append("- Platform: Android. Shell tersedia via tool Bash, tapi binnernya terbatas pada toybox bawaan Android: ls, cat, cp, mv, rm, mkdir, grep, sed, awk, find, df, du, ps, tar, gzip, gunzip, head, tail, wc, sort, uniq, date, echo, ping, wget, sh.\n")
+              .append("- TIDAK ADA: git, curl, python, node, npm, apt, sudo. Jangan mencoba menginstal paket.\n")
+              .append("- Perintah interaktif (top, vim) atau server (httpd, ping tanpa -c) akan mengunci sampai timeout — hindari.\n")
+              .append("- Workspace: ").append(workspace.getAbsolutePath()).append("\n")
+              .append("- Model: ").append(model).append("\n");
+        }
 
         try {
             String date = new SimpleDateFormat("EEEE, d MMMM yyyy", new Locale("id", "ID")).format(new Date());

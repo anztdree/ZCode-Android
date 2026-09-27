@@ -240,7 +240,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="6dp"
-                            android:text="13 preset BYOK — daftar model diambil dari /models penyedia"
+                            android:text="12 preset BYOK — daftar model diambil dari /models penyedia"
                             android:textSize="11sp"
                             android:textColor="?attr/cFgSubtlest"/>
 
@@ -668,6 +668,95 @@
                     android:textColor="?attr/cFgSubtlest"
                     android:singleLine="true"
                     android:ellipsize="start"/>
+
+                <!-- Kartu Sandbox Linux (proot + Alpine) ala Kai 9000 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginStart="12dp"
+                    android:layout_marginEnd="12dp"
+                    android:layout_marginBottom="8dp"
+                    android:background="@drawable/bg_tool_card"
+                    android:padding="12dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Sandbox Linux (proot)"
+                            android:textSize="14sp"
+                            android:textStyle="bold"
+                            android:textColor="?attr/cFg"/>
+
+                        <TextView
+                            android:id="@+id/txtSbStatus"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Belum terpasang"
+                            android:textSize="11sp"
+                            android:textColor="?attr/cFgSubtlest"/>
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="Alpine Linux di dalam aplikasi: bash, git, python3, nodejs via apk add — paket tersimpan. Proyek terlihat di /workspace."
+                        android:textSize="11sp"
+                        android:textColor="?attr/cFgSubtlest"/>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/btnSbInstall"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:gravity="center"
+                            android:background="@drawable/bg_chip"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="Pasang sandbox"
+                            android:textSize="13sp"
+                            android:textColor="?attr/cFg"/>
+
+                        <TextView
+                            android:id="@+id/btnSbToggle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="8dp"
+                            android:gravity="center"
+                            android:background="@drawable/bg_chip"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="Aktif: Tidak"
+                            android:textSize="13sp"
+                            android:textColor="?attr/cFg"/>
+
+                        <TextView
+                            android:id="@+id/btnSbRemove"
+                            android:layout_width="wrap_content"
+                            android:layout_height="34dp"
+                            android:layout_marginStart="8dp"
+                            android:gravity="center"
+                            android:background="@drawable/bg_chip"
+                            android:paddingStart="14dp"
+                            android:paddingEnd="14dp"
+                            android:text="Hapus"
+                            android:textSize="13sp"
+                            android:textColor="?attr/cDestructive"/>
+                    </LinearLayout>
+                </LinearLayout>
 
                 <ListView
                     android:id="@+id/fileList"

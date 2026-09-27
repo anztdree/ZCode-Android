@@ -5,6 +5,8 @@ package com.zcodemobile.app;
  * preset siap pakai (Base URL + tautan tempat membuat API key + catatan),
  * fetch daftar model dari /models, dan pemilihan model bebas.
  * Semua preset OpenAI-compatible (chat/completions + models).
+ * Semua penyedia cloud — model lokal (Ollama/LM Studio) dihapus sesuai
+ * permintaan pengguna (v2.3.1), NVIDIA NIM ditambahkan.
  */
 public class Providers {
 
@@ -53,12 +55,9 @@ public class Providers {
             new P("gemini", "Gemini (OpenAI-compat)", "https://generativelanguage.googleapis.com/v1beta/openai",
                     "https://aistudio.google.com/apikey",
                     "Endpoint OpenAI-compatible resmi Google — ada tier gratis.", false),
-            new P("ollama", "Ollama (lokal)", "http://localhost:11434/v1",
-                    "",
-                    "Tanpa API key. Ubah Base URL ke IP komputer/LAN Anda.", true),
-            new P("lmstudio", "LM Studio (lokal)", "http://localhost:1234/v1",
-                    "",
-                    "Tanpa API key. Ubah Base URL ke IP komputer/LAN Anda.", true),
+            new P("nvidia", "NVIDIA NIM", "https://integrate.api.nvidia.com/v1",
+                    "https://build.nvidia.com/",
+                    "Ratusan open-model (Llama, DeepSeek, Qwen…) — key berawalan nvapi- dari build.nvidia.com.", false),
             new P("custom", "Kustom (OpenAI-compatible)", "",
                     "",
                     "Provider apa pun — isi Base URL sendiri, model diambil dari /models.", true),

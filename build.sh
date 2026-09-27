@@ -19,12 +19,13 @@ rm -rf "$OUT"; mkdir -p "$OUT/gen" "$OUT/classes" "$OUT/dex"
 echo "▶ [1/7] aapt2 compile resources..."
 "$BT/aapt2" compile --dir res -o "$OUT/res.zip"
 
-echo "▶ [2/7] aapt2 link (manifest + resources + R.java)..."
+echo "▶ [2/7] aapt2 link (manifest + resources + assets + R.java)..."
 "$BT/aapt2" link -o "$OUT/base.apk" \
   -I "$PLATFORM" \
   --manifest AndroidManifest.xml \
   --java "$OUT/gen" \
   --auto-add-overlay \
+  -A assets \
   "$OUT/res.zip"
 
 echo "▶ [3/7] ECJ compile Java (mode pra-modul, bootclasspath = android.jar)..."

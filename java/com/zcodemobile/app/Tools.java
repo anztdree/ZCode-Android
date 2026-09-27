@@ -70,6 +70,10 @@ public class Tools {
     public JSONArray definitions() {
         JSONArray arr = new JSONArray();
         try {
+            boolean sb = Sandbox.on(appCtx);
+            String bashDesc = sb
+                ? "Executes a given sh command INSIDE the Alpine Linux sandbox (proot) with the project mounted at /workspace (cd /workspace is automatic). Full busybox + apk available — install extra tools with `apk add git python3 nodejs npm` (network required; installed packages persist across commands). cwd is preserved between calls. Avoid interactive programs and long-running servers."
+                : "Executes a given sh command in the workspace shell and returns its output. The shell is persistent: cd and variables survive between calls. Available binaries are Android toybox (ls, cat, grep, sed, awk, find, df, du, ps, tar, gzip, ping, wget, sh) — git, curl, python and package managers do NOT exist. Interactive commands (top, vim) and servers will block until timeout — avoid them.";
             arr.put(tool("Read", "Reads a file from the local filesystem. Reads up to 2000 lines by default, in cat -n format. You must Read a file before editing it.",
                     str("file_path", "Path file relatif workspace, mis: src/app.js"),
                     num("offset", "Nomor baris awal (opsional)"),
@@ -82,7 +86,7 @@ public class Tools {
                     str("old_string", "Teks lama yang diganti"),
                     str("new_string", "Teks pengganti"),
                     bool("replace_all", "Ganti semua kemunculan (default false)")));
-            arr.put(tool("Bash", "Executes a given sh command in the workspace shell and returns its output. The shell is persistent: cd and variables survive between calls. Available binaries are Android toybox (ls, cat, grep, sed, awk, find, df, du, ps, tar, gzip, ping, wget, sh) — git, curl, python and package managers do NOT exist. Interactive commands (top, vim) and servers will block until timeout — avoid them.",
+            arr.put(tool("Bash", bashDesc,
                     str("command", "Perintah sh yang dijalankan, mis: ls -la src/"),
                     num("timeout", "Batas waktu milidetik (default 120000, maksimum 600000)")));
             arr.put(tool("Glob", "Fast file pattern matching, e.g. \"**/*.js\" or \"src/**/*.ts\". Sorted by modification time.",
@@ -260,10 +264,16 @@ public class Tools {
         if (!checkPermission("Bash", "menjalankan perintah: " + command))
             return "User declined this command. Adjust your approach — don't retry verbatim.";
         if (shellAgent == null) shellAgent = new ShellSession(workspace);
-        ShellSession.Result r = shellAgent.run(command, timeout);
+        // Sandbox proot: perintah berjalan DI DALAM rootfs Alpine (workspace = /workspace)
+        boolean sb = Sandbox.on(appCtx);
+        String toRun = sb ? Sandbox.wrap(appCtx, command, workspace, timeout) : command;
+        ShellSession.Result r = shellAgent.run(toRun, timeout + (sb ? 30_000 : 0));
         String head = r.ok() ? "" : "exit code " + r.exitCode + "\n";
         return head + r.output;
     }
+
+    /** Sandbox proot aktif untuk perintah agent? (dipakai system prompt) */
+    public boolean sandboxActive() { return Sandbox.on(appCtx); }
 
     /** Sesi shell agent (persisten antar panggilan — cd/variabel tersimpan). */
     private ShellSession shellAgent;

@@ -77,7 +77,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
 
     private View scrim;
     private LinearLayout drawerPanel;
-    private TextView txtWsName, txtModel, txtStatus, txtTokens, txtMode, txtTheme, txtGreeting, txtSelModel, txtTest, txtFilesPath, btnProvider, lblBaseUrl;
+    private TextView txtWsName, txtModel, txtStatus, txtTokens, txtMode, txtTheme, txtGreeting, txtSelModel, txtTest, txtFilesPath, btnProvider, lblBaseUrl, txtSbStatus;
     private View statusStrip, emptyState;
     private ImageButton btnSend;
     private ImageView imgMode, imgTheme;
@@ -146,6 +146,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
 
         bindViews();
         bindListeners();
+        refreshSandboxCard(); // status kartu sandbox di halaman Berkas
 
         // Sesi aktif (atau baru).
         // PERBAIKAN FORCE CLOSE SAAT DIBUKA (v2.2.1): sebelumnya `saved` masih
@@ -319,6 +320,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         pageTerminal = findViewById(R.id.pageTerminal);
         pageChat = findViewById(R.id.pageChat);
         btnProvider = findViewById(R.id.btnProvider);
+        txtSbStatus = findViewById(R.id.txtSbStatus);
         tvTermOut = findViewById(R.id.tvTermOut);
         etTermInput = findViewById(R.id.etTermInput);
         scrollTerm = findViewById(R.id.scrollTerm);
@@ -362,6 +364,11 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         etBaseUrl.addTextChangedListener(autoValidate);
 
         findViewById(R.id.btnProvider).setOnClickListener(v -> showProviderPicker());
+
+        // Sandbox proot (halaman Berkas)
+        findViewById(R.id.btnSbInstall).setOnClickListener(v -> sandboxInstallFlow());
+        findViewById(R.id.btnSbToggle).setOnClickListener(v -> sandboxToggle());
+        findViewById(R.id.btnSbRemove).setOnClickListener(v -> sandboxRemoveFlow());
 
         btnSend.setOnClickListener(v -> {
             if (busy) {
@@ -496,7 +503,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         tint(R.id.navTerminalIcon, idx == 2 ? on : off);   textCol(R.id.navTerminalText, idx == 2 ? on : off);
         tint(R.id.navTodoIcon, idx == 3 ? on : off);       textCol(R.id.navTodoText, idx == 3 ? on : off);
         tint(R.id.navSettingsIcon, idx == 4 ? on : off);   textCol(R.id.navSettingsText, idx == 4 ? on : off);
-        if (idx == 1) { filesAdapter.reload(currentSub); refreshHeader(); }
+        if (idx == 1) { filesAdapter.reload(currentSub); refreshHeader(); refreshSandboxCard(); }
         if (idx == 2) termEnsureStarted();
     }
 
@@ -522,9 +529,14 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
     }
 
     private void termBanner(boolean withTips) {
-        termAppend("ZCode Terminal — sh (toybox) Android\n", col(R.attr.cSuccess));
+        boolean sb = Sandbox.on(this);
+        termAppend(sb
+                ? "ZCode Terminal — sandbox Alpine Linux (proot) · proyek = /workspace\n"
+                : "ZCode Terminal — sh (toybox) Android\n", col(R.attr.cSuccess));
         if (withTips)
-            termAppend("Direktori kerja: workspace proyek. Contoh: ls -la · cat berkas.txt · df -h\n\n",
+            termAppend(sb
+                    ? "Contoh: apk add git python3 · ls -la · df -h — cwd tersimpan antar perintah.\n\n"
+                    : "Direktori kerja: workspace proyek. Contoh: ls -la · cat berkas.txt · df -h\n\n",
                     col(R.attr.cFgSubtlest));
     }
 
@@ -569,6 +581,10 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         termShell.history.add(cmd);
         termShell.historyCursor = termShell.history.size();
 
+        // Sandbox aktif → perintah dijalankan di dalam rootfs Alpine
+        final boolean sb = Sandbox.on(this);
+        final String toRun = sb ? Sandbox.wrap(this, cmd, workspace, 120_000) : cmd;
+
         termAppend("$ " + cmd + "\n", col(R.attr.cSuccess));
         int runStart = tvTermOut.length();
         termAppend("menjalankan…\n", col(R.attr.cFgSubtlest));
@@ -578,7 +594,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         new Thread(() -> {
             ShellSession.Result r;
             try {
-                r = sh.run(cmd, 120_000);
+                r = sh.run(toRun, sb ? 150_000 : 120_000);
             } catch (Throwable e) { // Throwable agar termBusy selalu pulih
                 r = new ShellSession.Result("(galat: " + e + ")", 1);
             }
@@ -627,6 +643,91 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
     private void textCol(int id, int color) {
         View v = findViewById(id);
         if (v instanceof TextView) ((TextView) v).setTextColor(color);
+    }
+
+    /* ============================ SANDBOX PROOT ============================ */
+
+    /** Segarkan kartu Sandbox Linux di halaman Berkas. */
+    private void refreshSandboxCard() {
+        if (txtSbStatus == null) return;
+        try {
+            boolean ready = Sandbox.isReady(this);
+            txtSbStatus.setText(Sandbox.statusText(this));
+            txtSbStatus.setTextColor(ready ? col(R.attr.cSuccess) : col(R.attr.cFgSubtlest));
+            TextView install = findViewById(R.id.btnSbInstall);
+            install.setText(ready ? "Pasang ulang" : "Pasang sandbox");
+            TextView toggle = findViewById(R.id.btnSbToggle);
+            toggle.setText(Sandbox.enabled(this) ? "Aktif: Ya" : "Aktif: Tidak");
+            toggle.setEnabled(ready);
+            toggle.setAlpha(ready ? 1f : 0.45f);
+        } catch (Throwable ignore) { // kartu tidak boleh membuat aplikasi mati
+        }
+    }
+
+    private void sandboxInstallFlow() {
+        if (busy) { toast("Hentikan agent dulu"); return; }
+        if (Sandbox.isReady(this)) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Pasang ulang sandbox")
+                    .setMessage("Rootfs akan ditulis ulang — paket yang terinstal di sandbox (git, python3, dst) hilang. Lanjutkan?")
+                    .setPositiveButton("Ya, pasang ulang", (d, w) -> sandboxInstallStart())
+                    .setNegativeButton("Batal", null)
+                    .show();
+        } else {
+            sandboxInstallStart();
+        }
+    }
+
+    private void sandboxInstallStart() {
+        try {
+            android.app.ProgressDialog pd = new android.app.ProgressDialog(this);
+            pd.setTitle("Menyiapkan sandbox");
+            pd.setMessage("Memulai…");
+            pd.setIndeterminate(true);
+            pd.setCanceledOnTouchOutside(false);
+            pd.show();
+            Sandbox.install(this, new Sandbox.Cb() {
+                @Override public void onProgress(String msg) {
+                    ui.post(() -> { try { pd.setMessage(msg); } catch (Exception ignore) { } });
+                }
+
+                @Override public void onDone(boolean ok, String msg) {
+                    ui.post(() -> {
+                        try { pd.dismiss(); } catch (Exception ignore) { }
+                        toast(msg);
+                        refreshSandboxCard();
+                        if (ok) termBanner(false); // perbarui judul terminal
+                    });
+                }
+            });
+        } catch (Throwable t) {
+            toast("Gagal menyiapkan sandbox: " + t.getMessage());
+        }
+    }
+
+    private void sandboxToggle() {
+        if (!Sandbox.isReady(this)) { toast("Pasang sandbox dulu"); return; }
+        boolean nv = !Sandbox.enabled(this);
+        Sandbox.setEnabled(this, nv);
+        refreshSandboxCard();
+        toast(nv ? "Sandbox AKTIF — Bash & Terminal berjalan di Alpine Linux"
+                 : "Sandbox nonaktif — kembali ke shell toybox Android");
+        termBanner(false);
+    }
+
+    private void sandboxRemoveFlow() {
+        if (!Sandbox.isReady(this)) { toast("Sandbox belum terpasang"); return; }
+        new AlertDialog.Builder(this)
+                .setTitle("Hapus sandbox")
+                .setMessage("Hapus proot & rootfs Alpine (±10 MB)? Paket yang terinstal di sandbox ikut hilang.")
+                .setPositiveButton("Hapus", (d, w) -> {
+                    Sandbox.remove(MainActivity.this);
+                    refreshSandboxCard();
+                    termBanner(false);
+                    toast("Sandbox dihapus");
+                })
+                .setNegativeButton("Batal", null)
+                .show();
     }
 
     /* ============================== CHAT & ENGINE ============================== */
@@ -1188,8 +1289,20 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
             pickModelDialog("Pilih model · Z.ai", all, freeSet);
             return;
         }
+        // Penjaga sebelum fetch — hindari error membingungkan di bagian API key
+        Providers.P p = Providers.byId(pt);
+        if (p.editableUrl && Prefs.baseUrlOf(this, pt).isEmpty()) {
+            toast("Isi Base URL " + p.name + " dulu di Setelan");
+            manualModelDialog();
+            return;
+        }
+        if (Prefs.apiKeyOf(this, pt).isEmpty()) {
+            toast("Tempel API key " + p.name + " dulu — atau ketik nama model manual");
+            manualModelDialog();
+            return;
+        }
         // BYOK: fetch /models penyedia (ala Kai 9000)
-        txtTest.setText("Memuat model dari " + Providers.byId(pt).name + "…");
+        txtTest.setText("Memuat model dari " + p.name + "…");
         txtTest.setTextColor(col(R.attr.cFgSubtlest));
         LlmClient.fetchModels(Prefs.activeBaseUrl(this), Prefs.activeApiKey(this),
                 new LlmClient.ModelsCallback() {
@@ -1401,10 +1514,8 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
     private void refreshSettingsPanel() {
         Providers.P p = Providers.byId(Prefs.providerType(this));
         btnProvider.setText("Penyedia: " + p.name);
-        boolean noKey = "ollama".equals(p.id) || "lmstudio".equals(p.id);
-        etApiKey.setEnabled(!noKey);
-        etApiKey.setHint(noKey ? "tanpa API key (provider lokal)" : "tempel API key " + p.name);
-        etApiKey.setText(noKey ? "" : Prefs.apiKeyOf(this, p.id));
+        etApiKey.setHint("tempel API key " + p.name);
+        etApiKey.setText(Prefs.apiKeyOf(this, p.id));
         lblBaseUrl.setVisibility(p.editableUrl ? View.VISIBLE : View.GONE);
         etBaseUrl.setVisibility(p.editableUrl ? View.VISIBLE : View.GONE);
         if (p.editableUrl) etBaseUrl.setText(Prefs.baseUrlOf(this, p.id));
@@ -1420,15 +1531,35 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         ui.postDelayed(validateRun, 800);
     }
 
+    private int validationGen = 0; // pembasmi respons basi antar ketikan
+
     private final Runnable validateRun = new Runnable() {
         @Override public void run() {
             persistSettings();
+            String base = Prefs.activeBaseUrl(MainActivity.this);
+            String key = Prefs.activeApiKey(MainActivity.this);
+            final int myGen = ++validationGen;
+            // PERBAIKAN BUG API KEY (v2.3.1): jangan menembak ke penyedia saat
+            // data belum layak — dulu field kosong memicu fetch dengan key ""
+            // sehingga muncul error mentah 401/404 ("Full error") di panel.
+            if (base.isEmpty()) {
+                txtTest.setText("Isi Base URL penyedia dulu — koneksi dicek otomatis");
+                txtTest.setTextColor(col(R.attr.cWarning));
+                return;
+            }
+            if (key.isEmpty()) {
+                txtTest.setText("Tempel API key " + Providers.byId(Prefs.providerType(MainActivity.this)).name
+                        + " — koneksi dicek otomatis saat key terisi");
+                txtTest.setTextColor(col(R.attr.cFgSubtlest));
+                return;
+            }
             txtTest.setText("Memeriksa koneksi…");
             txtTest.setTextColor(col(R.attr.cFgSubtlest));
-            LlmClient.fetchModels(Prefs.activeBaseUrl(MainActivity.this), Prefs.activeApiKey(MainActivity.this),
+            LlmClient.fetchModels(base, key,
                     new LlmClient.ModelsCallback() {
                         @Override public void onModels(final List<String> ids) {
                             runOnUiThread(() -> {
+                                if (myGen != validationGen) return; // respons basi
                                 if (ids.isEmpty()) {
                                     txtTest.setText("✓ Terhubung — daftar model kosong (ketik nama model manual)");
                                     txtTest.setTextColor(col(R.attr.cWarning));
@@ -1441,6 +1572,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
 
                         @Override public void onError(final String message) {
                             runOnUiThread(() -> {
+                                if (myGen != validationGen) return; // respons basi
                                 txtTest.setText("✗ " + message);
                                 txtTest.setTextColor(col(R.attr.cDestructive));
                             });
@@ -1899,10 +2031,16 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
 
     private void testConnection() {
         persistSettings();
-        txtTest.setText("Menguji…");
-        LlmClient.testConnection(Prefs.activeBaseUrl(this), Prefs.activeApiKey(this),
+        String model = Prefs.activeModel(this);
+        // PERBAIKAN BUG API KEY (v2.3.1): dulu model di-hardcode glm-4.5-flash,
+        // jadi uji koneksi PENYEDIA LAIN selalu gagal 400/404 dengan error mentah.
+        txtTest.setText(model.isEmpty()
+                ? "Menguji koneksi…"
+                : "Menguji koneksi & model " + Prefs.prettyModel(model) + "…");
+        txtTest.setTextColor(col(R.attr.cFgSubtlest));
+        LlmClient.testConnection(Prefs.activeBaseUrl(this), Prefs.activeApiKey(this), model,
                 (ok, msg) -> runOnUiThread(() -> {
-                    txtTest.setText(msg);
+                    txtTest.setText(ok ? "✓ " + msg : "✗ " + msg);
                     txtTest.setTextColor(ok ? col(R.attr.cSuccess) : col(R.attr.cDestructive));
                 }));
     }
