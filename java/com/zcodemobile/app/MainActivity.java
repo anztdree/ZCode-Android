@@ -327,6 +327,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         pageChat = findViewById(R.id.pageChat);
         btnProvider = findViewById(R.id.btnProvider);
         txtSbStatus = findViewById(R.id.txtSbStatus);
+        txtSbStatus.setOnLongClickListener(v -> { showSandboxLogDialog(); return true; });
         tvTermOut = findViewById(R.id.tvTermOut);
         etTermInput = findViewById(R.id.etTermInput);
         scrollTerm = findViewById(R.id.scrollTerm);
@@ -670,8 +671,14 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         if (txtSbStatus == null) return;
         try {
             boolean ready = Sandbox.isReady(this);
-            txtSbStatus.setText(Sandbox.statusText(this));
-            txtSbStatus.setTextColor(ready ? col(R.attr.cSuccess) : col(R.attr.cFgSubtlest));
+            String lastErr = Sandbox.lastError(this);
+            if (!ready && lastErr != null && !lastErr.isEmpty()) {
+                txtSbStatus.setText("Gagal — tekan lama utk log");
+                txtSbStatus.setTextColor(col(R.attr.cDestructive));
+            } else {
+                txtSbStatus.setText(Sandbox.statusText(this));
+                txtSbStatus.setTextColor(ready ? col(R.attr.cSuccess) : col(R.attr.cFgSubtlest));
+            }
             TextView install = findViewById(R.id.btnSbInstall);
             install.setText(ready ? "Pasang ulang" : "Pasang sandbox");
             TextView toggle = findViewById(R.id.btnSbToggle);
@@ -680,6 +687,19 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
             toggle.setAlpha(ready ? 1f : 0.45f);
         } catch (Throwable ignore) { // kartu tidak boleh membuat aplikasi mati
         }
+    }
+
+    /** Tekan lama status sandbox → tampilkan log pasang (diagnosa tanpa PC). */
+    private void showSandboxLogDialog() {
+        String log = Sandbox.lastLog(this);
+        if (log == null || log.isEmpty()) { toast("Belum ada log pasang sandbox"); return; }
+        if (log.length() > 4000) log = log.substring(log.length() - 4000);
+        new AlertDialog.Builder(this)
+                .setTitle("Log Pasang Sandbox")
+                .setMessage(log)
+                .setPositiveButton("Salin log", (d, w) -> { copyText("Log sandbox", Sandbox.lastLog(this)); toast("Log disalin — tempel ke chat bila perlu bantuan"); })
+                .setNegativeButton("Tutup", null)
+                .show();
     }
 
     private void sandboxInstallFlow() {
@@ -703,6 +723,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
             pd.setMessage("Memulai…");
             pd.setIndeterminate(true);
             pd.setCanceledOnTouchOutside(false);
+            pd.setCancelable(false); // jangan bisa dibatalkan → cegah dobel-pasang
             pd.show();
             Sandbox.install(this, new Sandbox.Cb() {
                 @Override public void onProgress(String msg) {
@@ -712,15 +733,35 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
                 @Override public void onDone(boolean ok, String msg) {
                     ui.post(() -> {
                         try { pd.dismiss(); } catch (Exception ignore) { }
-                        toast(msg);
                         refreshSandboxCard();
-                        if (ok) termBanner(false); // perbarui judul terminal
+                        if (ok) {
+                            toast(msg);
+                            termBanner(false); // perbarui judul terminal
+                        } else {
+                            sandboxFailureDialog(msg);
+                        }
                     });
                 }
             });
         } catch (Throwable t) {
             toast("Gagal menyiapkan sandbox: " + t.getMessage());
         }
+    }
+
+    /** Dialog kegagalan pasang: pesan + akses log lengkap (bisa disalin). */
+    private void sandboxFailureDialog(String msg) {
+        String log = Sandbox.lastLog(this);
+        String pesan = msg + "\n\nLog diagnostik lengkap tersimpan — gunakan \"Salin log\" lalu tempel ke chat ZCode bila perlu bantuan.";
+        new AlertDialog.Builder(this)
+                .setTitle("Pemasangan sandbox gagal")
+                .setMessage(pesan)
+                .setPositiveButton("Coba lagi", (d, w) -> sandboxInstallStart())
+                .setNeutralButton(log.isEmpty() ? null : "Salin log", (d, w) -> {
+                    copyText("Log sandbox", Sandbox.lastLog(this));
+                    toast("Log disalin — tempel ke chat bila perlu bantuan");
+                })
+                .setNegativeButton("Tutup", null)
+                .show();
     }
 
     private void sandboxToggle() {

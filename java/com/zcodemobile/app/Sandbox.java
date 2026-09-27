@@ -34,6 +34,13 @@ public class Sandbox {
         void onDone(boolean ok, String msg);
     }
 
+    /** Kunci anti-race: hanya SATU thread pasang boleh hidup.
+     *  Dulu: user bisa membatalkan dialog lalu menekan "Pasang" lagi → dua
+     *  thread saling menghapus/mengekstrak folder rootfs → mkdirs gagal
+     *  → "tidak bisa membuat folder rootfs". (akar bug v2.4.0) */
+    private static final java.util.concurrent.atomic.AtomicBoolean INSTALLING =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
     private static final long MAX_TAR_BYTES = 80L * 1024 * 1024; // pengaman
 
     /* ------------------------------- state ------------------------------- */
@@ -96,20 +103,46 @@ public class Sandbox {
         return "arm64"; // mayoritas ponsel modern
     }
 
+    /** Log pasang terakhir (files/sandbox-log.txt) — untuk tombol "Salin Log". */
+    public static String lastLog(Context c) {
+        try {
+            File f = new File(c.getApplicationContext().getFilesDir(), "sandbox-log.txt");
+            if (!f.isFile()) return "";
+            byte[] b = Files.readAllBytes(f.toPath());
+            return new String(b, StandardCharsets.UTF_8);
+        } catch (Exception e) { return ""; }
+    }
+
+    /** Ringkasan penyebab gagal terakhir (untuk kartu sandbox). */
+    public static String lastError(Context c) {
+        return Prefs.get(c.getApplicationContext(), "sb_last_err", "");
+    }
+
     public static void install(final Context ctx, final Cb cb) {
         final Context c = ctx.getApplicationContext();
+        if (!INSTALLING.compareAndSet(false, true)) {
+            cb.onDone(false, "Pemasangan lain sedang berjalan — tunggu hingga selesai.");
+            return;
+        }
         new Thread(() -> {
             final StringBuilder log = new StringBuilder("ZCode Mobile — Log Pasang Sandbox\n");
             try {
                 String abi = pickAbi();
+                log.append("Perangkat: ").append(android.os.Build.MANUFACTURER).append(' ')
+                   .append(android.os.Build.MODEL)
+                   .append(" · Android ").append(android.os.Build.VERSION.RELEASE)
+                   .append(" (SDK ").append(android.os.Build.VERSION.SDK_INT).append(")\n");
                 log.append("ABI: ").append(android.os.Build.SUPPORTED_ABIS != null
                         ? java.util.Arrays.toString(android.os.Build.SUPPORTED_ABIS) : "?")
                   .append(" → asset: ").append(abi).append('\n');
 
                 Prefs.set(c, "sb_ready", "0");
+                Prefs.set(c, "sb_last_err", "");
                 File sb = sbDir(c);
-                if (!sb.isDirectory() && !sb.mkdirs())
-                    throw new Exception("tidak bisa membuat folder sandbox");
+                if (!sb.isDirectory()) forceMkdir(sb, "folder sandbox");
+                log.append("ruang bebas files/: ")
+                   .append(c.getFilesDir().getFreeSpace() / (1024 * 1024)).append(" MB\n");
+
                 cb.onProgress("Menyalin binary proot (" + abi + ")…");
                 log.append("langkah: salin proot_").append(abi).append('\n');
                 File proot = prootBin(c);
@@ -120,13 +153,35 @@ public class Sandbox {
                 cb.onProgress("Mengekstrak rootfs Alpine (sekali saja)…");
                 log.append("langkah: ekstrak rootfs_").append(abi).append('\n');
                 File rootfs = rootfsDir(c);
-                if (rootfs.exists()) deleteRecur(rootfs);
-                if (!rootfs.mkdirs()) throw new Exception("tidak bisa membuat folder rootfs");
+                // Hapus sisa pasangan lama — VERIFIKASI benar-benar hilang;
+                // folder basi di sini membuat mkdirs() gagal (salah satu akar
+                // "tidak bisa membuat folder rootfs").
+                if (rootfs.exists()) {
+                    cb.onProgress("Membersihkan sisa rootfs lama…");
+                    forceDelete(rootfs);
+                    if (rootfs.exists())
+                        throw new Exception("folder rootfs lama tidak bisa dihapus (ruang: "
+                                + (sb.getFreeSpace() / (1024 * 1024)) + " MB) — coba Hapus lalu Pasang lagi");
+                }
+                forceMkdir(rootfs, "folder rootfs");
                 extractTarGz(c.getAssets().open("sandbox/rootfs_" + abi + ".tar.gz"), rootfs, cb);
+
+                cb.onProgress("Memverifikasi isi rootfs…");
+                File busy = new File(rootfs, "bin/busybox");
+                if (!busy.isFile())
+                    throw new Exception("rootfs tidak lengkap: bin/busybox hilang (ekstraksi gagal senyap)");
+                if (!busy.canExecute()) busy.setExecutable(true, false);
+                if (!new File(rootfs, "bin/sh").exists())
+                    throw new Exception("rootfs tidak lengkap: bin/sh hilang");
+                if (!new File(rootfs, "sbin/apk").exists())
+                    throw new Exception("rootfs tidak lengkap: sbin/apk hilang (apk add tidak akan jalan)");
+                log.append("verifikasi rootfs: busybox+sh+apk OK\n");
 
                 cb.onProgress("Menyiapkan konfigurasi jaringan…");
                 writeFile(new File(rootfs, "etc/resolv.conf"),
                         "nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 8.8.4.4\n");
+                writeFile(new File(rootfs, "etc/hosts"),
+                        "127.0.0.1 localhost\n::1 localhost\n");
                 writeFile(new File(rootfs, "root/.profile"), "export PS1='zcode:\\w# '\n");
                 File stage = stageDir(c);
                 if (!stage.isDirectory() && !stage.mkdirs())
@@ -134,23 +189,58 @@ public class Sandbox {
 
                 cb.onProgress("Menguji sandbox…");
                 log.append("langkah: uji eksekusi proot\n");
-                String test = wrap(c, "echo zcode-sandbox-ok", c.getFilesDir(), 30_000);
+                String test = wrap(c, "echo zcode-sandbox-ok; uname -m", c.getFilesDir(), 45_000);
                 log.append("perintah: ").append(test).append('\n');
-                ShellSession.Result r = ShellSession.execOnce(c.getFilesDir(), test, 30_000);
+                ShellSession.Result r = ShellSession.execOnce(c.getFilesDir(), test, 45_000);
                 log.append("exit=").append(r.exitCode).append(" output=\"").append(r.output).append("\"\n");
                 if (!r.ok() || !r.output.contains("zcode-sandbox-ok"))
                     throw new Exception("uji eksekusi gagal (exit " + r.exitCode + "): "
-                            + firstLines(r.output, 4));
+                            + firstLines(r.output, 6));
 
                 Prefs.set(c, "sb_ready", "1");
+                Prefs.set(c, "sb_last_err", "");
                 saveLog(c, log.append("HASIL: SUKSES\n").toString());
                 cb.onDone(true, "Sandbox siap — perintah kini berjalan di Alpine Linux");
             } catch (Exception e) {
                 Prefs.set(c, "sb_ready", "0");
-                saveLog(c, log.append("HASIL: GAGAL — ").append(e).append('\n').toString());
-                cb.onDone(false, "Gagal memasang sandbox: " + e.getMessage());
+                String singkat = e.getMessage() == null ? e.toString() : e.getMessage();
+                if (singkat.length() > 200) singkat = singkat.substring(0, 200) + "…";
+                Prefs.set(c, "sb_last_err", singkat);
+                saveLog(c, log.append("HASIL: GAGAL — ").append(e)
+                        .append("\n\nCatatan: bila error \"Operation not permitted\"/\"EPERM\", " +
+                                "perangkat/OEM memblokir eksekusi binary atau ptrace " +
+                                "(proot). Coba matikan pembatasan aplikasi (baterai/" +
+                                "keamanan OEM) lalu pasang ulang.\n").toString());
+                cb.onDone(false, "Gagal memasang sandbox: " + singkat);
+            } finally {
+                INSTALLING.set(false);
             }
         }, "sb-install").start();
+    }
+
+    /** mkdirs dengan pesan error yang menjelaskan (path + ruang + ibu). */
+    private static void forceMkdir(File d, String nama) throws Exception {
+        if (d.isDirectory()) return;
+        File parent = d.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory())
+            throw new Exception("tidak bisa membuat " + nama + ": folder induk gagal ("
+                    + parent.getAbsolutePath() + ", bebas "
+                    + (parent.getFreeSpace() / (1024 * 1024)) + " MB)");
+        if (!d.mkdirs() && !d.isDirectory())
+            throw new Exception("tidak bisa membuat " + nama + " (" + d.getAbsolutePath()
+                    + ") — konflik berkas? bebas "
+                    + (d.getFreeSpace() / (1024 * 1024)) + " MB");
+    }
+
+    /** Hapus rekursif + VERIFIKASI hilang (3 percobaan). */
+    private static void forceDelete(File root) {
+        for (int attempt = 0; attempt < 3 && root.exists(); attempt++) {
+            deleteRecur(root);
+            if (root.exists()) {
+                System.gc(); // lepaskan pegangan berkas yang mungkin tersisa
+                try { Thread.sleep(150); } catch (Exception ignore) { }
+            }
+        }
     }
 
     /** Simpan log pasang sandbox → files/sandbox-log.txt (bisa dikirim user). */
@@ -246,7 +336,7 @@ public class Sandbox {
                .append(" -b ").append(shellQ(stage.getAbsolutePath() + ":/zstage"))
                .append(" -b /dev -b /proc -b /sys")
                .append(" /bin/sh ").append(shellQ("/zstage/" + name));
-            return "PROOT_NO_SECCOMP=1 " + cmd;
+            return cmd.toString();
         } catch (Exception e) {
             return "echo '(sandbox gagal menyiapkan perintah: " + e.getMessage() + ")'; exit 1";
         }
