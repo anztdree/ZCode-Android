@@ -1,191 +1,163 @@
 package com.zcodemobile.app;
 
-import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.view.Gravity;
+import android.text.method.LinkMovementMethod;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
-import android.widget.LinearLayout;
+import android.widget.ImageView;
 import android.widget.TextView;
 
-import org.json.JSONObject;
-
-import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Adapter chat ala ZCode Desktop: bubble user (hitam pekat), bubble bot (kartu),
- * TOOL CARD dengan ikon+status (berjalan/berhasil/gagal), dan baris info.
- */
+/** Adapter chat: bubble user kanan, assistant markdown full-width, tool card collapsible, kartu rencana. */
 public class ChatAdapter extends BaseAdapter {
 
-    public static final int ROLE_USER = 0;
-    public static final int ROLE_BOT = 1;
-    public static final int ROLE_INFO = 2;
-    public static final int ROLE_TOOL = 3;
+    private final List<ChatItem> items;
+    private final LayoutInflater inf;
+    private final int fg, fgSubtle, fgSubtlest, codeBg, codeFg, ask, success, warning, destructive;
+    private final MarkdownLite md;
+    public PlanActionListener planListener;
 
-    private static class Item {
-        int role;
-        String text;
-        String detail;
-        boolean typing;
-        boolean ok; // status tool
-        boolean running;
-        Item(int r, String t, boolean ty) { role = r; text = t; typing = ty; }
+    public interface PlanActionListener {
+        void onApprove(ChatItem item);
+        void onReject(ChatItem item);
     }
 
-    private final List<Item> items = new ArrayList<>();
-    private final LayoutInflater inflater;
-    private final boolean dark;
-
-    public ChatAdapter(Context ctx, boolean darkTheme) {
-        inflater = LayoutInflater.from(ctx);
-        dark = darkTheme;
+    public ChatAdapter(List<ChatItem> items, LayoutInflater inf, MarkdownLite md,
+                       int fg, int fgSubtle, int fgSubtlest, int codeBg, int codeFg, int ask,
+                       int success, int warning, int destructive) {
+        this.items = items;
+        this.inf = inf;
+        this.md = md;
+        this.fg = fg; this.fgSubtle = fgSubtle; this.fgSubtlest = fgSubtlest;
+        this.codeBg = codeBg; this.codeFg = codeFg; this.ask = ask;
+        this.success = success; this.warning = warning; this.destructive = destructive;
     }
-
-    public void addUser(String text) { items.add(new Item(ROLE_USER, text, false)); notifyDataSetChanged(); }
-    public void addBot(String text) { items.add(new Item(ROLE_BOT, text, false)); notifyDataSetChanged(); }
-    public void addInfo(String text) { items.add(new Item(ROLE_INFO, text, false)); notifyDataSetChanged(); }
-    public void addTyping() { items.add(new Item(ROLE_BOT, "…", true)); notifyDataSetChanged(); }
-
-    /** Tambah kartu tool yang sedang berjalan; kembalikan posisinya. */
-    public int addTool(String name, String argsPreview) {
-        Item it = new Item(ROLE_TOOL, "", false);
-        it.detail = argsPreview == null ? "" : argsPreview;
-        it.running = true;
-        items.add(it);
-        notifyDataSetChanged();
-        return items.size() - 1;
-    }
-
-    /** Perbarui kartu tool dengan hasil. */
-    public void updateTool(int pos, String resultPreview, boolean ok) {
-        if (pos < 0 || pos >= items.size()) return;
-        Item it = items.get(pos);
-        it.running = false;
-        it.ok = ok;
-        it.detail = resultPreview == null ? "" : resultPreview;
-        notifyDataSetChanged();
-    }
-
-    public void updateLastBot(String text) {
-        for (int i = items.size() - 1; i >= 0; i--) {
-            if (items.get(i).role == ROLE_BOT) { items.get(i).text = text; items.get(i).typing = false; break; }
-        }
-        notifyDataSetChanged();
-    }
-
-    public String textAt(int pos) {
-        if (pos < 0 || pos >= items.size()) return null;
-        return items.get(pos).text;
-    }
-
-    public void clear() { items.clear(); notifyDataSetChanged(); }
 
     @Override public int getCount() { return items.size(); }
     @Override public Object getItem(int position) { return items.get(position); }
     @Override public long getItemId(int position) { return position; }
-    @Override public int getViewTypeCount() { return 4; }
-    @Override public int getItemViewType(int position) { return items.get(position).role; }
+    @Override public int getViewTypeCount() { return 5; }
+    @Override public int getItemViewType(int position) { return items.get(position).type; }
 
     @Override
     public View getView(int position, View convertView, ViewGroup parent) {
-        Item it = items.get(position);
-
-        if (it.role == ROLE_TOOL) {
-            View v = convertView;
-            if (v == null || !(v.getTag() instanceof Integer) || (Integer) v.getTag() != ROLE_TOOL) {
-                v = inflater.inflate(R.layout.item_tool, parent, false);
-            }
-            v.setTag(ROLE_TOOL);
-            v.setBackgroundResource(dark ? R.drawable.tool_card_dark_shape : R.drawable.tool_card_shape);
-
-            TextView icon = v.findViewById(R.id.toolIcon);
-            TextView name = v.findViewById(R.id.toolName);
-            TextView status = v.findViewById(R.id.toolStatus);
-            TextView detail = v.findViewById(R.id.toolDetail);
-
-            icon.setText(iconFor(it.text));
-            name.setText(it.text);
-            name.setTextColor(color(dark ? "#FAFAFA" : "#0A0A0A"));
-
-            if (it.running) {
-                status.setText("● " + "berjalan…");
-                status.setTextColor(color(dark ? "#FF8A30" : "#E07B00"));
-            } else if (it.ok) {
-                status.setText("✓ selesai");
-                status.setTextColor(color(dark ? "#46BF72" : "#1E8A3E"));
-            } else {
-                status.setText("✕ gagal");
-                status.setTextColor(color(dark ? "#FF6B6B" : "#E03131"));
-            }
-            detail.setText(it.detail);
-            detail.setTextColor(color(dark ? "#A3A3A3" : "#737373"));
-            return v;
-        }
-
+        ChatItem it = items.get(position);
         View v = convertView;
-        if (v == null || !(v.getTag() instanceof Integer) || (Integer) v.getTag() == ROLE_TOOL) {
-            v = inflater.inflate(R.layout.item_message, parent, false);
+        switch (it.type) {
+            case ChatItem.TYPE_USER: return bindUser(it, v);
+            case ChatItem.TYPE_ASSISTANT: return bindAssistant(it, v);
+            case ChatItem.TYPE_TOOL: return bindTool(it, v);
+            case ChatItem.TYPE_PLAN: return bindPlan(it, v);
+            default: return bindNote(it, v);
         }
-        v.setTag(it.role);
+    }
 
-        LinearLayout bubble = v.findViewById(R.id.bubble);
-        TextView role = v.findViewById(R.id.msgRole);
-        TextView text = v.findViewById(R.id.msgText);
+    private View bindUser(ChatItem it, View v) {
+        if (v == null) v = inf.inflate(R.layout.item_msg_user, null);
+        TextView txt = v.findViewById(R.id.txt);
+        txt.setTextColor(fg);
+        txt.setText(it.text);
+        return v;
+    }
 
-        ViewGroup.LayoutParams lp0 = bubble.getLayoutParams();
-        if (lp0 instanceof android.widget.FrameLayout.LayoutParams) {
-            ((android.widget.FrameLayout.LayoutParams) lp0).gravity =
-                    it.role == ROLE_USER ? Gravity.END : Gravity.START;
-            bubble.setLayoutParams(lp0);
+    private View bindAssistant(ChatItem it, View v) {
+        if (v == null) v = inf.inflate(R.layout.item_msg_assistant, null);
+        TextView txt = v.findViewById(R.id.txt);
+        txt.setTextColor(fg);
+        txt.setMovementMethod(new LinkMovementMethod());
+        txt.setText(md.render(it.text.isEmpty() ? "…" : it.text));
+        return v;
+    }
+
+    private View bindNote(ChatItem it, View v) {
+        if (v == null) v = inf.inflate(R.layout.item_note, null);
+        TextView txt = v.findViewById(R.id.txt);
+        txt.setText(it.text);
+        return v;
+    }
+
+    private View bindTool(ChatItem it, View v) {
+        if (v == null) v = inf.inflate(R.layout.item_tool, null);
+        ImageView ico = v.findViewById(R.id.ico);
+        TextView title = v.findViewById(R.id.txtTitle);
+        TextView stat = v.findViewById(R.id.txtStat);
+        ImageView chev = v.findViewById(R.id.chev);
+        TextView out = v.findViewById(R.id.txtOut);
+
+        ico.setImageResource(iconFor(it.toolName));
+        ico.setColorFilter(fgSubtle);
+        title.setText(it.toolDetail.isEmpty() ? it.toolName : it.toolDetail);
+        title.setTextColor(fg);
+
+        int color;
+        String label;
+        switch (it.toolStatus) {
+            case ChatItem.ST_RUNNING: color = warning; label = "Berjalan…"; break;
+            case ChatItem.ST_OK: color = success; label = "Selesai"; break;
+            case ChatItem.ST_ERR: color = destructive; label = "Gagal"; break;
+            case ChatItem.ST_DENIED: color = fgSubtlest; label = "Ditolak"; break;
+            default: color = fgSubtlest; label = "Menunggu"; break;
         }
+        stat.setTextColor(color);
+        stat.setText(label);
+        chev.setVisibility(it.text.isEmpty() ? View.GONE : View.VISIBLE);
+        chev.setRotation(it.expanded ? 180f : 0f);
+        chev.setColorFilter(fgSubtlest);
 
-        if (it.role == ROLE_USER) {
-            bubble.setBackgroundResource(dark ? R.drawable.bubble_user_dark_shape : R.drawable.bubble_user_shape);
-            role.setText("Kamu");
-            role.setTextColor(color(dark ? "#0A0A0A99" : "#FFFFFF99"));
-            text.setTextColor(color(dark ? "#0A0A0A" : "#FFFFFF"));
-        } else if (it.role == ROLE_BOT) {
-            bubble.setBackgroundResource(dark ? R.drawable.bubble_bot_dark_shape : R.drawable.bubble_bot_shape);
-            role.setText(it.typing ? "ZCode • menulis…" : "ZCode");
-            role.setTextColor(color(dark ? "#A3A3A3" : "#737373"));
-            text.setTextColor(color(dark ? "#FAFAFA" : "#0A0A0A"));
+        if (it.expanded && !it.text.isEmpty()) {
+            out.setVisibility(View.VISIBLE);
+            out.setText(it.text.length() > 4000 ? it.text.substring(0, 4000) + "…" : it.text);
         } else {
-            bubble.setBackgroundResource(dark ? R.drawable.bubble_bot_dark_shape : R.drawable.bubble_bot_shape);
-            role.setText("ZCode");
-            role.setTextColor(color(dark ? "#46BF72" : "#1E8A3E"));
-            text.setTextColor(color(dark ? "#A3A3A3" : "#737373"));
-            text.setTextSize(13f);
+            out.setVisibility(View.GONE);
         }
 
-        if (it.role == ROLE_INFO) {
-            text.setText(it.text);
-            text.setTypeface(Typeface.MONOSPACE, Typeface.ITALIC);
+        View card = v.findViewById(R.id.toolCard);
+        card.setOnClickListener(x -> {
+            if (it.text.isEmpty()) return;
+            it.expanded = !it.expanded;
+            notifyDataSetChanged();
+        });
+        return v;
+    }
+
+    private View bindPlan(ChatItem it, View v) {
+        if (v == null) v = inf.inflate(R.layout.item_plan, null);
+        TextView plan = v.findViewById(R.id.txtPlan);
+        plan.setTextColor(fg);
+        plan.setText(md.render(it.text));
+        View buttons = v.findViewById(R.id.planButtons);
+        if (it.planResolved) {
+            buttons.setVisibility(View.GONE);
         } else {
-            text.setTypeface(Typeface.DEFAULT);
-            text.setText(MarkdownLite.render(it.text));
+            buttons.setVisibility(View.VISIBLE);
+            TextView approve = v.findViewById(R.id.btnApprove);
+            TextView reject = v.findViewById(R.id.btnReject);
+            approve.setOnClickListener(x -> { if (planListener != null) planListener.onApprove(it); });
+            reject.setOnClickListener(x -> { if (planListener != null) planListener.onReject(it); });
         }
         return v;
     }
 
-    private String iconFor(String tool) {
-        if (tool == null) return "⚙️";
+    public static int iconFor(String tool) {
         switch (tool) {
-            case "write_file": return "📝";
-            case "read_file": return "📖";
-            case "edit_file": return "✏️";
-            case "list_files": return "📂";
-            case "grep": return "🔍";
-            case "delete_path": return "🗑️";
-            case "todo_write": return "✅";
-            case "web_fetch": return "🌐";
-            default: return "⚙️";
+            case "Read": return R.drawable.ic_file_text;
+            case "Write": return R.drawable.ic_pen;
+            case "Edit": return R.drawable.ic_pen;
+            case "Delete": return R.drawable.ic_trash;
+            case "Glob": return R.drawable.ic_folder;
+            case "Grep": return R.drawable.ic_search;
+            case "WebFetch": return R.drawable.ic_globe;
+            case "WebSearch": return R.drawable.ic_search;
+            case "TodoWrite": return R.drawable.ic_list_checks;
+            case "TodoRead": return R.drawable.ic_list_todo;
+            case "AskUserQuestion": return R.drawable.ic_help;
+            case "EnterPlanMode": return R.drawable.ic_target;
+            case "ExitPlanMode": return R.drawable.ic_target;
+            default: return R.drawable.ic_terminal;
         }
     }
-
-    private int color(String hex) { return Color.parseColor(hex); }
 }

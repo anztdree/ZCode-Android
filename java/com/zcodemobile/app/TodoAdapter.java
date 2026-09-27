@@ -5,52 +5,69 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
-import android.widget.CheckBox;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Adapter daftar tugas. */
+/** Adapter todo — format ZCode: status pending/in_progress/completed + priority. */
 public class TodoAdapter extends BaseAdapter {
 
-    public interface Listener {
-        void onToggle(int pos);
-        void onDelete(int pos);
+    private final JSONArray items;
+    private final LayoutInflater inf;
+    private final int fg, fgSubtle, fgSubtlest, success, warning, destructive;
+
+    public TodoAdapter(JSONArray items, LayoutInflater inf,
+                       int fg, int fgSubtle, int fgSubtlest, int success, int warning, int destructive) {
+        this.items = items;
+        this.inf = inf;
+        this.fg = fg; this.fgSubtle = fgSubtle; this.fgSubtlest = fgSubtlest;
+        this.success = success; this.warning = warning; this.destructive = destructive;
     }
 
-    private final LayoutInflater inflater;
-    private JSONArray data = new JSONArray();
-    private Listener listener;
-
-    public TodoAdapter(LayoutInflater li) { inflater = li; }
-
-    public void setListener(Listener l) { listener = l; }
-
-    public void setData(JSONArray arr) { data = arr == null ? new JSONArray() : arr; notifyDataSetChanged(); }
-
-    @Override public int getCount() { return data.length(); }
-    @Override public Object getItem(int position) { return data.optJSONObject(position); }
+    @Override public int getCount() { return items.length(); }
+    @Override public Object getItem(int position) { return items.opt(position); }
     @Override public long getItemId(int position) { return position; }
 
     @Override
     public View getView(int position, View convertView, ViewGroup parent) {
-        View v = convertView;
-        if (v == null) v = inflater.inflate(R.layout.item_todo, parent, false);
-        JSONObject o = data.optJSONObject(position);
-        if (o == null) return v;
-        boolean done = o.optBoolean("done");
-        CheckBox check = v.findViewById(R.id.todoCheck);
-        TextView text = v.findViewById(R.id.todoText);
-        TextView del = v.findViewById(R.id.todoDel);
-        check.setOnCheckedChangeListener(null);
-        check.setChecked(done);
-        text.setText(o.optString("title", "(tanpa judul)"));
-        text.setPaintFlags(text.getPaintFlags() & (done ? ~0 : 0));
-        if (done) text.setPaintFlags(text.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
-        else text.setPaintFlags(text.getPaintFlags() & ~Paint.STRIKE_THRU_TEXT_FLAG);
-        check.setOnCheckedChangeListener((b, w) -> { if (listener != null) listener.onToggle(position); });
-        del.setOnClickListener(x -> { if (listener != null) listener.onDelete(position); });
-        return v;
+        if (convertView == null) convertView = inf.inflate(R.layout.item_todo, null);
+        JSONObject o = items.optJSONObject(position);
+        if (o == null) return convertView;
+        String status = o.optString("status", "pending");
+        String priority = o.optString("priority", "medium");
+        String content = o.optString("content", o.optString("title", ""));
+
+        ImageView chk = convertView.findViewById(R.id.chk);
+        TextView txt = convertView.findViewById(R.id.txtContent);
+        TextView pri = convertView.findViewById(R.id.txtPriority);
+
+        int color;
+        switch (status) {
+            case "completed":
+                chk.setImageResource(R.drawable.ic_check);
+                chk.setColorFilter(success);
+                color = fgSubtle;
+                txt.setPaintFlags(txt.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
+                break;
+            case "in_progress":
+                chk.setImageResource(R.drawable.ic_target);
+                chk.setColorFilter(warning);
+                color = fg;
+                txt.setPaintFlags(txt.getPaintFlags() & ~Paint.STRIKE_THRU_TEXT_FLAG);
+                break;
+            default:
+                chk.setImageResource(R.drawable.ic_circle);
+                chk.setColorFilter(fgSubtlest);
+                color = fg;
+                txt.setPaintFlags(txt.getPaintFlags() & ~Paint.STRIKE_THRU_TEXT_FLAG);
+                break;
+        }
+        txt.setTextColor(color);
+        txt.setText(content);
+        pri.setText("high".equals(priority) ? "tinggi" : ("low".equals(priority) ? "rendah" : "sedang"));
+        pri.setTextColor("high".equals(priority) ? destructive : ("low".equals(priority) ? fgSubtlest : fgSubtle));
+        return convertView;
     }
 }

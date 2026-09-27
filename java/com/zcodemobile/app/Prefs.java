@@ -17,11 +17,26 @@ public class Prefs {
         p.edit().putString(key, value).apply();
     }
 
-    public static boolean isDarkTheme(Context c) {
-        return "dark".equals(get(c, "theme", "light"));
+    /** Tema: light (default) / dark / system. */
+    public static String themeMode(Context c) {
+        return get(c, "theme_mode", "light");
     }
 
-    /** Base URL aktif sesuai provider. */
+    /* ============ Agent mode — 4 mode persis ZCode Desktop ============ */
+    // build = "Tanya dulu" (default) | edit = "Ubah otomatis" | plan = "Mode rencana" | yolo = "Akses penuh"
+    public static final String MODE_BUILD = "build";
+    public static final String MODE_EDIT = "edit";
+    public static final String MODE_PLAN = "plan";
+    public static final String MODE_YOLO = "yolo";
+
+    public static String agentMode(Context c) {
+        String m = get(c, "agent_mode", MODE_BUILD);
+        return (MODE_BUILD.equals(m) || MODE_EDIT.equals(m) || MODE_PLAN.equals(m) || MODE_YOLO.equals(m))
+                ? m : MODE_BUILD;
+    }
+
+    /* ============================ Provider ============================ */
+
     public static String activeBaseUrl(Context c) {
         String type = get(c, "provider_type", "zai");
         if ("custom".equals(type)) {
@@ -46,19 +61,25 @@ public class Prefs {
         return "custom".equals(type) ? "" : "glm-4.5-flash";
     }
 
-    /** Daftar model hardcoded untuk Z.ai (gratis di atas). */
-    public static String[] zaiModels() {
-        return new String[]{
-                "glm-4.5-flash",
-                "glm-4-flash",
-                "glm-4-flash-250414",
-                "glm-4v-flash",
-                "glm-4.5-air",
-                "glm-4.6",
-                "glm-4.5",
-                "glm-4.5v",
-                "glm-4-plus",
-                "glm-4-long"
-        };
+    /** Model Z.ai hardcoded — gratis dulu (sesi user: model gratis diprioritaskan). */
+    public static String[] zaiFreeModels() {
+        return new String[]{"glm-4.5-flash", "glm-4-flash", "glm-4-flash-250414", "glm-4v-flash"};
+    }
+
+    public static String[] zaiPaidModels() {
+        return new String[]{"glm-4.5-air", "glm-4.6", "glm-4.5", "glm-4.5v", "glm-4-plus", "glm-4-long"};
+    }
+
+    /** Nama tampil rapi: glm-4.5-flash -> GLM-4.5-Flash */
+    public static String prettyModel(String id) {
+        if (id == null || id.isEmpty()) return id;
+        String[] parts = id.split("-");
+        StringBuilder sb = new StringBuilder();
+        for (String p : parts) {
+            if (sb.length() > 0) sb.append('-');
+            if (p.matches("\\d+(\\.\\d+)?")) sb.append(p);
+            else sb.append(p.substring(0, 1).toUpperCase()).append(p.substring(1));
+        }
+        return sb.toString();
     }
 }

@@ -13,7 +13,7 @@ import java.util.List;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Klien LLM OpenAI-compatible: streaming SSE + fetch daftar model + uji koneksi. */
+/** Klien LLM OpenAI-compatible: streaming SSE + tool_calls + usage (ala ZCode: stream_options.include_usage). */
 public class LlmClient {
 
     public interface StreamCallback {
@@ -21,6 +21,8 @@ public class LlmClient {
         void onDelta(String content);
         /** Dipanggil saat ada tool_call (kumulatif dipanggil sekali per tool lengkap). */
         void onToolCall(int index, String id, String name, String arguments);
+        /** Dipanggil bila chunk membawa pemakaian token (chunk terakhir). */
+        void onUsage(int promptTokens, int completionTokens);
         void onDone(String stopReason);
         void onError(String message);
     }
@@ -47,12 +49,13 @@ public class LlmClient {
                 body.put("model", model);
                 body.put("messages", messages);
                 body.put("stream", true);
+                body.put("stream_options", new JSONObject().put("include_usage", true));
                 if (tools != null && tools.length() > 0) body.put("tools", tools);
 
                 conn = (HttpURLConnection) new URL(baseUrl + "/chat/completions").openConnection();
                 conn.setRequestMethod("POST");
                 conn.setConnectTimeout(20000);
-                conn.setReadTimeout(120000);
+                conn.setReadTimeout(180000);
                 conn.setDoOutput(true);
                 conn.setRequestProperty("Content-Type", "application/json");
                 conn.setRequestProperty("Authorization", "Bearer " + apiKey);
@@ -93,6 +96,14 @@ public class LlmClient {
                     if ("[DONE]".equals(data)) break;
                     try {
                         JSONObject chunk = new JSONObject(data);
+
+                        // usage (chunk terakhir) — cek SEBELUM choices (choices bisa kosong)
+                        JSONObject usage = chunk.optJSONObject("usage");
+                        if (usage != null) {
+                            cb.onUsage(usage.optInt("prompt_tokens", 0),
+                                    usage.optInt("completion_tokens", 0));
+                        }
+
                         JSONArray choices = chunk.optJSONArray("choices");
                         if (choices == null || choices.length() == 0) continue;
                         JSONObject c0 = choices.getJSONObject(0);
@@ -139,7 +150,8 @@ public class LlmClient {
                 }
                 cb.onDone(stop);
             } catch (Exception e) {
-                cb.onError(e.getClass().getSimpleName() + ": " + e.getMessage());
+                if (!cancelled) cb.onError(e.getClass().getSimpleName() + ": " + e.getMessage());
+                else cb.onDone("cancelled");
             } finally {
                 if (conn != null) conn.disconnect();
             }

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Token UI persis dari design system ZCode Desktop (styles CSS asli) -->
+<resources>
+    <attr name="cBg" format="color"/>
+    <attr name="cHeader" format="color"/>
+    <attr name="cSidebar" format="color"/>
+    <attr name="cCard" format="color"/>
+    <attr name="cFg" format="color"/>
+    <attr name="cFgSubtle" format="color"/>
+    <attr name="cFgSubtlest" format="color"/>
+    <attr name="cBorder" format="color"/>
+    <attr name="cBorderHover" format="color"/>
+    <attr name="cSecondary" format="color"/>
+    <attr name="cSurface" format="color"/>
+    <attr name="cSuccess" format="color"/>
+    <attr name="cWarning" format="color"/>
+    <attr name="cDestructive" format="color"/>
+    <attr name="cAsk" format="color"/>
+    <attr name="cBrand" format="color"/>
+    <attr name="cBrandFg" format="color"/>
+    <attr name="cCodeBg" format="color"/>
+    <attr name="cCodeFg" format="color"/>
+</resources>

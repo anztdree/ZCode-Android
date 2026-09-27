@@ -2,748 +2,1405 @@ package com.zcodemobile.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.ClipData;
-import android.content.ClipboardManager;
-import android.graphics.Color;
+import android.content.Intent;
+import android.content.res.Configuration;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.webkit.WebView;
-import android.widget.ArrayAdapter;
-import android.widget.Button;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.BaseAdapter;
 import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
-import android.widget.Spinner;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 
-public class MainActivity extends Activity {
+/**
+ * ZCode Mobile — antarmuka utama.
+ * Struktur mengikuti ZCode Desktop: sidebar tugas (drawer) + header (model chip)
+ * + percakapan (bubble user, markdown, tool card, kartu rencana) + composer
+ * (mode selector, lampiran, kirim/stop) + halaman Berkas/Todo/Setelan.
+ */
+public class MainActivity extends Activity implements ChatAdapter.PlanActionListener {
 
-    private boolean dark;
-    private final Handler ui = new Handler(Looper.getMainLooper());
+    /* ------------------------------- State ------------------------------- */
 
-    /* Navigasi */
-    private View chatPage, filesPage, todoPage, settingsPage;
-    private Button navChat, navFiles, navTodo, navSettings;
-    private TextView titleText, modelChip;
-
-    /* Chat */
-    private ListView chatList;
-    private EditText inputText;
-    private Button sendBtn;
-    private ChatAdapter chatAdapter;
-    private JSONArray history = new JSONArray();
-    private boolean agentBusy = false;
-    private AgentEngine engine;
-    private final List<Integer> pendingToolCards = new ArrayList<>();
-
-    /* Sesi */
-    private long sessionId = SessionStore.newSession();
-
-    /* Berkas */
-    private ListView fileList;
-    private TextView pathText;
-    private FilesAdapter filesAdapter;
-    private File currentDir;
-
-    /* Tugas */
-    private ListView todoList;
-    private EditText todoInput;
-    private Button todoAddBtn;
-    private TodoAdapter todoAdapter;
-
-    /* Setelan */
-    private RadioGroup providerGroup, themeGroup;
-    private RadioButton providerZai, providerCustom, themeLight, themeDark;
-    private EditText apiKeyInput, baseUrlInput;
-    private Spinner modelSpinner;
-    private Button refreshModelsBtn, testBtn;
-    private TextView testResult;
-    private ArrayAdapter<String> modelAdapter;
-    private List<String> modelIds = new ArrayList<>();
-
+    private File workspace;
     private Tools tools;
+    private AgentEngine engine;
+
+    private final List<ChatItem> chatItems = new ArrayList<>();
+    private ChatAdapter chatAdapter;
+    private FilesAdapter filesAdapter;
+    private TodoAdapter todoAdapter;
+    private SessionAdapter sessionAdapter;
+    private MarkdownLite md;
+
+    private String sessionId = "";
+    private boolean busy = false;
+    private boolean allowAllSession = false;
+    private long startedAt = 0;
+    private int tokensP = 0, tokensC = 0;
+    private String statusBase = "Bekerja…";
+    private ChatItem currentAssistant = null;
+    private final java.util.Map<String, ChatItem> toolCards = new java.util.HashMap<>();
+    private long lastNotify = 0;
+
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private Runnable timerRun;
+
+    /* ------------------------------- Views ------------------------------- */
+
+    private View scrim;
+    private LinearLayout drawerPanel;
+    private TextView txtWsName, txtModel, txtStatus, txtTokens, txtMode, txtTheme, txtGreeting, txtSelModel, txtTest, txtFilesPath;
+    private View statusStrip, emptyState;
+    private ImageButton btnSend;
+    private ImageView imgMode, imgTheme;
+    private EditText etInput, etApiKey, etBaseUrl, etSessionSearch, etNewTodo;
+    private ListView chatList, fileList, todoList, sessionList;
+    private ScrollView pageSettings;
+    private LinearLayout pageChat, pageFiles, pageTodo, pageTerminal;
+    private TextView tvTermOut;
+    private EditText etTermInput;
+    private ScrollView scrollTerm;
+    private ShellSession termShell;
+    private boolean termBusy = false;
+    private int activePage = 0;
+
+    /* =============================== LIFECYCLE =============================== */
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        dark = Prefs.isDarkTheme(this);
-        setTheme(dark ? R.style.AppTheme_Dark : R.style.AppTheme);
+        applyTheme();
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        File ws = new File(getFilesDir(), "workspace");
-        if (!ws.exists()) ws.mkdirs();
-        ensureWelcomeFile(ws);
-        tools = new Tools(getApplicationContext(), ws);
+        workspace = new File(getFilesDir(), "workspace");
+        if (!workspace.exists()) workspace.mkdirs();
+
+        md = new MarkdownLite(col(R.attr.cFg), col(R.attr.cFgSubtle), col(R.attr.cFgSubtlest),
+                col(R.attr.cCodeBg), col(R.attr.cCodeFg), col(R.attr.cAsk),
+                code -> {
+                    android.content.ClipboardManager cm =
+                            (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("code", code));
+                    toast("Kode disalin");
+                });
+
+        tools = new Tools(this, workspace);
+        tools.mode = Prefs.agentMode(this);
+        tools.bridge = bridge();
+        tools.modeHook = newMode -> {
+            Prefs.set(this, "agent_mode", newMode);
+            runOnUiThread(() -> {
+                updateModeChip();
+                addNote("Mode agent: " + modeLabel(newMode));
+            });
+        };
 
         bindViews();
-        setupNav();
-        setupChat(ws);
-        setupFiles(ws);
-        setupTodo();
-        setupSettings();
-        setupHeaderActions();
-        fillModels(null);
-        refreshHeader();
-    }
+        bindListeners();
 
-    @Override
-    protected void onResume() {
-        super.onResume();
-        refreshHeader();
-        filesAdapter.load(currentDir);
-        reloadTodo();
-    }
-
-    /* ================= BINDING ================= */
-
-    private void bindViews() {
-        chatPage = findViewById(R.id.chatPage);
-        filesPage = findViewById(R.id.filesPage);
-        todoPage = findViewById(R.id.todoPage);
-        settingsPage = findViewById(R.id.settingsPage);
-
-        navChat = findViewById(R.id.navChat);
-        navFiles = findViewById(R.id.navFiles);
-        navTodo = findViewById(R.id.navTodo);
-        navSettings = findViewById(R.id.navSettings);
-
-        titleText = findViewById(R.id.titleText);
-        modelChip = findViewById(R.id.modelChip);
-
-        chatList = findViewById(R.id.chatList);
-        inputText = findViewById(R.id.inputText);
-        sendBtn = findViewById(R.id.sendBtn);
-
-        fileList = findViewById(R.id.fileList);
-        pathText = findViewById(R.id.pathText);
-
-        todoList = findViewById(R.id.todoList);
-        todoInput = findViewById(R.id.todoInput);
-        todoAddBtn = findViewById(R.id.todoAddBtn);
-
-        providerGroup = findViewById(R.id.providerGroup);
-        themeGroup = findViewById(R.id.themeGroup);
-        providerZai = findViewById(R.id.providerZai);
-        providerCustom = findViewById(R.id.providerCustom);
-        themeLight = findViewById(R.id.themeLight);
-        themeDark = findViewById(R.id.themeDark);
-        apiKeyInput = findViewById(R.id.apiKeyInput);
-        baseUrlInput = findViewById(R.id.baseUrlInput);
-        modelSpinner = findViewById(R.id.modelSpinner);
-        refreshModelsBtn = findViewById(R.id.refreshModelsBtn);
-        testBtn = findViewById(R.id.testBtn);
-        testResult = findViewById(R.id.testResult);
-
-        paintHeader();
-    }
-
-    private void paintHeader() {
-        if (dark) {
-            titleText.setTextColor(Color.parseColor("#FAFAFA"));
-            modelChip.setTextColor(Color.parseColor("#A3A3A3"));
+        // Sesi aktif (atau baru)
+        sessionId = SessionStore.currentId(this);
+        JSONArray saved = null;
+        if (!sessionId.isEmpty()) {
+            saved = SessionStore.loadItems(this, sessionId);
+            if (saved.length() == 0 && !new File(SessionStore.dir(this), sessionId + ".json").exists())
+                sessionId = "";
+        }
+        if (sessionId.isEmpty()) {
+            sessionId = SessionStore.create(this, "Tugas baru");
         } else {
-            titleText.setTextColor(Color.parseColor("#0A0A0A"));
-            modelChip.setTextColor(Color.parseColor("#737373"));
+            tools.mode = SessionStore.loadMode(this, sessionId);
         }
-    }
-
-    private void refreshHeader() {
-        String type = Prefs.get(this, "provider_type", "zai");
-        String prov = "custom".equals(type) ? "Custom" : "Z.ai";
-        String model = Prefs.activeModel(this);
-        modelChip.setText(prov + " • " + (model.isEmpty() ? "pilih model" : model));
-    }
-
-    /* ================= HEADER AKSI (sesi + model picker) ================= */
-
-    private void setupHeaderActions() {
-        modelChip.setOnClickListener(v -> showModelPicker());
-
-        findViewById(R.id.newChatBtn).setOnClickListener(v -> newChat());
-
-        findViewById(R.id.historyBtn).setOnClickListener(v -> showHistory());
-    }
-
-    private void showModelPicker() {
-        String type = Prefs.get(this, "provider_type", "zai");
-        final List<String> ids = new ArrayList<>();
-        if ("custom".equals(type)) {
-            String saved = Prefs.get(this, "custom_models", "");
-            try {
-                JSONArray arr = new JSONArray(saved);
-                for (int i = 0; i < arr.length(); i++) ids.add(arr.getString(i));
-            } catch (Exception ignore) { }
-            if (ids.isEmpty()) {
-                toast("Buka Setelan → Muat ulang daftar model dulu");
-                return;
-            }
-        } else {
-            ids.addAll(java.util.Arrays.asList(Prefs.zaiModels()));
+        for (int i = 0; i < saved.length(); i++) {
+            JSONObject o = saved.optJSONObject(i);
+            if (o != null) chatItems.add(ChatItem.fromJson(o));
         }
-        String current = Prefs.activeModel(this);
-        int sel = ids.indexOf(current);
 
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.pick_model)
-                .setSingleChoiceItems(ids.toArray(new String[0]), sel, (d, w) -> {
-                    Prefs.set(this, "model_" + type, ids.get(w));
-                    d.dismiss();
-                    refreshHeader();
-                })
-                .setNegativeButton(R.string.cancel, null)
-                .show();
-    }
-
-    private void newChat() {
-        saveCurrentSession();
-        history = new JSONArray();
-        sessionId = SessionStore.newSession();
-        chatAdapter.clear();
-        chatAdapter.addInfo("Chat baru dimulai ✨\nApa yang ingin kita bangun hari ini?");
-    }
-
-    private void showHistory() {
-        List<SessionStore.Meta> metas = SessionStore.list(this);
-        if (metas.isEmpty()) { toast(getString(R.string.no_sessions)); return; }
-        final List<String> titles = new ArrayList<>();
-        for (SessionStore.Meta m : metas) titles.add(m.title);
-        CharSequence[] arr = titles.toArray(new String[0]);
-        CharSequence[] actions = {"📂 Buka", "🗑️ Hapus", "🗑️ Hapus semua"};
-
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.history)
-                .setItems(arr, (d, w) -> openSession(metas.get(w)))
-                .setNeutralButton("Hapus semua", (d, w) -> {
-                    SessionStore.deleteAll(this);
-                    toast("Semua riwayat dihapus");
-                })
-                .setNegativeButton(R.string.cancel, null)
-                .show();
-    }
-
-    private void openSession(SessionStore.Meta m) {
-        saveCurrentSession();
-        history = SessionStore.loadMessages(this, m.id);
-        sessionId = m.id;
-        chatAdapter.clear();
-        try {
-            for (int i = 0; i < history.length(); i++) {
-                JSONObject o = history.getJSONObject(i);
-                String role = o.optString("role");
-                if ("user".equals(role)) chatAdapter.addUser(o.optString("content"));
-                else if ("assistant".equals(role)) {
-                    String c = o.optString("content");
-                    chatAdapter.addBot(c == null || c.isEmpty() ? "(tool)" : c);
-                }
-            }
-        } catch (Exception ignore) { }
-        showPage(0);
-    }
-
-    private void saveCurrentSession() {
-        if (history.length() > 0) {
-            String title = firstUserText();
-            SessionStore.save(this, sessionId, title, history);
-        }
-    }
-
-    private String firstUserText() {
-        try {
-            for (int i = 0; i < history.length(); i++) {
-                JSONObject o = history.getJSONObject(i);
-                if ("user".equals(o.optString("role"))) {
-                    String t = o.optString("content", "");
-                    return t.length() > 42 ? t.substring(0, 42) + "…" : t;
-                }
-            }
-        } catch (Exception ignore) { }
-        return "Chat " + sessionId;
-    }
-
-    /* ================= NAVIGASI ================= */
-
-    private void setupNav() {
-        navChat.setOnClickListener(v -> showPage(0));
-        navFiles.setOnClickListener(v -> showPage(1));
-        navTodo.setOnClickListener(v -> showPage(2));
-        navSettings.setOnClickListener(v -> showPage(3));
-        showPage(0);
-    }
-
-    private void showPage(int idx) {
-        chatPage.setVisibility(idx == 0 ? View.VISIBLE : View.GONE);
-        filesPage.setVisibility(idx == 1 ? View.VISIBLE : View.GONE);
-        todoPage.setVisibility(idx == 2 ? View.VISIBLE : View.GONE);
-        settingsPage.setVisibility(idx == 3 ? View.VISIBLE : View.GONE);
-        String[] titles = {"ZCode", "Berkas", "Tugas", "Setelan"};
-        titleText.setText(titles[idx]);
-        String active = dark ? "#FAFAFA" : "#0A0A0A";
-        String idle = dark ? "#A3A3A3" : "#737373";
-        navChat.setTextColor(Color.parseColor(idx == 0 ? active : idle));
-        navFiles.setTextColor(Color.parseColor(idx == 1 ? active : idle));
-        navTodo.setTextColor(Color.parseColor(idx == 2 ? active : idle));
-        navSettings.setTextColor(Color.parseColor(idx == 3 ? active : idle));
-        if (idx == 1) filesAdapter.load(currentDir);
-        if (idx == 2) reloadTodo();
-    }
-
-    /* ================= CHAT ================= */
-
-    private void setupChat(final File ws) {
-        chatAdapter = new ChatAdapter(this, dark);
+        chatAdapter = new ChatAdapter(chatItems, getLayoutInflater(), md,
+                col(R.attr.cFg), col(R.attr.cFgSubtle), col(R.attr.cFgSubtlest),
+                col(R.attr.cCodeBg), col(R.attr.cCodeFg), col(R.attr.cAsk),
+                col(R.attr.cSuccess), col(R.attr.cWarning), col(R.attr.cDestructive));
+        chatAdapter.planListener = this;
         chatList.setAdapter(chatAdapter);
-        chatAdapter.addInfo("Selamat datang di ZCode Mobile ⚡\n"
-                + "Agent coding native di HP-mu, terinspirasi ZCode Desktop.\n\n"
-                + "Coba: \"buatkan halaman web profil\" atau \"buat landing page toko\".\n"
-                + "Tekan lama pesan untuk menyalin • 🕘 untuk riwayat • ＋ untuk chat baru.");
 
-        chatList.setOnItemLongClickListener((p, v, pos, id) -> {
-            String t = chatAdapter.textAt(pos);
-            if (t != null && !t.isEmpty() && !"…".equals(t)) {
-                ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                cm.setPrimaryClip(ClipData.newPlainText("zcode", t));
-                toast(getString(R.string.copied));
-                return true;
-            }
-            return false;
-        });
+        // Satu engine seumur activity — riwayat konteks tetap tersambung antar-kirim
+        engine = new AgentEngine(new LlmClient(Prefs.activeBaseUrl(this),
+                Prefs.activeApiKey(this), Prefs.activeModel(this)), tools, engineCallbacks());
+        rebuildHistory();
 
-        sendBtn.setOnClickListener(v -> {
-            if (agentBusy) {
-                if (engine != null) engine.cancel();
-                setBusy(false);
-                chatAdapter.addInfo("⏹ Dihentikan.");
-                return;
-            }
-            String text = inputText.getText().toString().trim();
-            if (text.isEmpty()) return;
-            String key = Prefs.activeApiKey(this);
-            if (key.isEmpty()) {
-                Toast.makeText(this, R.string.error_no_key, Toast.LENGTH_LONG).show();
-                showPage(3);
-                return;
-            }
-            inputText.setText("");
-            startAgent(text);
-        });
-    }
-
-    private void setBusy(boolean busy) {
-        agentBusy = busy;
-        sendBtn.setText(busy ? R.string.stop : R.string.send);
-    }
-
-    private void startAgent(String userText) {
-        try {
-            history.put(new JSONObject().put("role", "user").put("content", userText));
-        } catch (Exception ignore) { }
-        chatAdapter.addUser(userText);
-        chatAdapter.addTyping();
-        scrollChat();
-        setBusy(true);
-        pendingToolCards.clear();
-
-        String baseUrl = Prefs.activeBaseUrl(this);
-        String key = Prefs.activeApiKey(this);
-        String model = Prefs.activeModel(this);
-        String sys = AgentEngine.buildSystemPrompt(tools.getWorkspace().getPath());
-        engine = new AgentEngine(baseUrl, key, model, tools, sys);
-
-        final StringBuilder lastBotBuf = new StringBuilder();
-
-        engine.run(history, new AgentEngine.Listener() {
-            @Override public void onStreamDelta(String piece) {
-                ui.post(() -> {
-                    lastBotBuf.append(piece);
-                    chatAdapter.updateLastBot(lastBotBuf.toString());
-                    scrollChat();
-                });
-            }
-            @Override public void onToolStart(String name, String argsPreview) {
-                ui.post(() -> {
-                    pendingToolCards.add(chatAdapter.addTool(name, argsPreview));
-                    scrollChat();
-                });
-            }
-            @Override public void onToolResult(String name, String resultPreview, boolean ok) {
-                ui.post(() -> {
-                    int pos = pendingToolCards.isEmpty() ? -1 : pendingToolCards.remove(0);
-                    chatAdapter.updateTool(pos, name + " → " + resultPreview, ok);
-                    if ("todo_write".equals(name)) reloadTodo();
-                    if ("write_file".equals(name) || "delete_path".equals(name)) filesAdapter.load(currentDir);
-                    scrollChat();
-                });
-            }
-            @Override public void onAssistantDone(String fullText) {
-                ui.post(() -> {
-                    String clean = fullText == null || fullText.trim().isEmpty() ? "(selesai)" : fullText.trim();
-                    try { history.put(new JSONObject().put("role", "assistant").put("content", clean)); }
-                    catch (Exception ignore) { }
-                    chatAdapter.updateLastBot(clean);
-                    setBusy(false);
-                    saveCurrentSession();
-                    scrollChat();
-                });
-            }
-            @Override public void onError(String message) {
-                ui.post(() -> {
-                    chatAdapter.addInfo("❌ " + message);
-                    setBusy(false);
-                });
-            }
-            @Override public void onRound(int round) { }
-        });
-    }
-
-    private void scrollChat() {
-        chatList.post(() -> chatList.setSelection(chatAdapter.getCount() - 1));
-    }
-
-    /* ================= BERKAS ================= */
-
-    private void setupFiles(final File ws) {
-        currentDir = ws;
-        filesAdapter = new FilesAdapter(getLayoutInflater());
+        filesAdapter = new FilesAdapter(workspace, getLayoutInflater(),
+                col(R.attr.cFg), col(R.attr.cFgSubtle), col(R.attr.cFgSubtlest));
         fileList.setAdapter(filesAdapter);
-        pathText.setText(shownPath(ws));
-        filesAdapter.load(ws);
+        filesAdapter.reload("");
 
-        filesAdapter.setListener(new FilesAdapter.Listener() {
-            @Override public void onOpenFile(File f) {
-                String n = f.getName().toLowerCase();
-                if (n.endsWith(".html") || n.endsWith(".htm")) fileOptions(f);
-                else openEditor(f);
-            }
-            @Override public void onOpenFolder(File f) {
-                currentDir = f;
-                pathText.setText(shownPath(f));
-                filesAdapter.load(f);
-            }
-            @Override public void onMore(File f) { fileOptions(f); }
-        });
-
-        findViewById(R.id.upBtn).setOnClickListener(v -> {
-            File parent = currentDir.getParentFile();
-            if (parent != null && parent.getPath().startsWith(ws.getPath())) {
-                currentDir = parent;
-                pathText.setText(shownPath(parent));
-                filesAdapter.load(parent);
-            }
-        });
-
-        findViewById(R.id.newFileBtn).setOnClickListener(v ->
-                askName("Berkas baru", "contoh.html", name -> {
-                    File f = new File(currentDir, name);
-                    try {
-                        if (!f.exists()) Files.write(f.toPath(), new byte[0]);
-                        filesAdapter.load(currentDir);
-                        openEditor(f);
-                    } catch (Exception e) { toast("Gagal: " + e.getMessage()); }
-                }));
-
-        findViewById(R.id.newFolderBtn).setOnClickListener(v ->
-                askName("Folder baru", "proyek", name -> {
-                    File f = new File(currentDir, name);
-                    if (f.mkdirs()) filesAdapter.load(currentDir);
-                    else toast("Gagal membuat folder");
-                }));
-    }
-
-    private String shownPath(File f) {
-        File ws = tools.getWorkspace();
-        String p = f.getPath();
-        return p.equals(ws.getPath()) ? "workspace/" : p.replace(ws.getPath() + "/", "workspace/");
-    }
-
-    private interface NameCb { void onName(String name); }
-
-    private void askName(String title, String hint, final NameCb cb) {
-        final EditText et = new EditText(this);
-        et.setHint(hint);
-        et.setSingleLine(true);
-        new AlertDialog.Builder(this)
-                .setTitle(title)
-                .setView(et)
-                .setPositiveButton(R.string.save, (d, w) -> {
-                    String n = et.getText().toString().trim();
-                    if (!n.isEmpty()) cb.onName(n);
-                })
-                .setNegativeButton(R.string.cancel, null)
-                .show();
-    }
-
-    private void fileOptions(final File f) {
-        boolean html = f.getName().toLowerCase().endsWith(".html") || f.getName().toLowerCase().endsWith(".htm");
-        List<String> opts = new ArrayList<>();
-        if (html) opts.add(getString(R.string.preview));
-        opts.add(getString(R.string.open_editor));
-        opts.add(getString(R.string.rename));
-        opts.add(getString(R.string.delete));
-        CharSequence[] arr = opts.toArray(new CharSequence[0]);
-        new AlertDialog.Builder(this)
-                .setTitle(f.getName())
-                .setItems(arr, (d, w) -> {
-                    String chosen = opts.get(w);
-                    if (chosen.equals(getString(R.string.preview))) showPreview(f);
-                    else if (chosen.equals(getString(R.string.open_editor))) openEditor(f);
-                    else if (chosen.equals(getString(R.string.rename))) {
-                        askName("Ganti nama", f.getName(), n -> {
-                            File nf = new File(f.getParentFile(), n);
-                            if (f.renameTo(nf)) filesAdapter.load(currentDir);
-                            else toast("Gagal mengganti nama");
-                        });
-                    } else {
-                        new AlertDialog.Builder(this)
-                                .setTitle("Hapus " + f.getName() + "?")
-                                .setPositiveButton(R.string.delete, (d2, w2) -> {
-                                    deleteRecursive(f);
-                                    filesAdapter.load(currentDir);
-                                })
-                                .setNegativeButton(R.string.cancel, null)
-                                .show();
-                    }
-                })
-                .show();
-    }
-
-    /** Pratinjau HTML di WebView (ala artifact preview ZCode Desktop). */
-    private void showPreview(File f) {
-        WebView wv = new WebView(this);
-        wv.getSettings().setJavaScriptEnabled(true);
-        wv.loadUrl("file://" + f.getAbsolutePath());
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.addView(wv, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(420)));
-        new AlertDialog.Builder(this)
-                .setTitle("👁 " + f.getName())
-                .setView(box)
-                .setPositiveButton(R.string.cancel, null)
-                .show();
-    }
-
-    private void deleteRecursive(File f) {
-        if (f.isDirectory()) {
-            File[] kids = f.listFiles();
-            if (kids != null) for (File k : kids) deleteRecursive(k);
-        }
-        f.delete();
-    }
-
-    private void openEditor(final File f) {
-        final EditText et = new EditText(this);
-        et.setTypeface(Typeface.MONOSPACE);
-        et.setTextSize(13f);
-        et.setMinLines(8);
-        et.setGravity(android.view.Gravity.TOP);
-        try {
-            byte[] b = Files.readAllBytes(f.toPath());
-            et.setText(new String(b, StandardCharsets.UTF_8));
-        } catch (Exception ignore) { }
-        ScrollView sv = new ScrollView(this);
-        sv.addView(et, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(320)));
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(16), dp(8), dp(16), 0);
-        box.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        new AlertDialog.Builder(this)
-                .setTitle(f.getName())
-                .setView(box)
-                .setPositiveButton(R.string.save, (d, w) -> {
-                    try {
-                        Files.write(f.toPath(), et.getText().toString().getBytes(StandardCharsets.UTF_8));
-                        toast("Tersimpan ✓");
-                        filesAdapter.load(currentDir);
-                    } catch (Exception e) { toast("Gagal simpan: " + e.getMessage()); }
-                })
-                .setNegativeButton(R.string.cancel, null)
-                .show();
-    }
-
-    private int dp(int n) { return Math.round(n * getResources().getDisplayMetrics().density); }
-
-    /* ================= TUGAS ================= */
-
-    private void setupTodo() {
-        todoAdapter = new TodoAdapter(getLayoutInflater());
+        todoAdapter = new TodoAdapter(TodoStore.load(this), getLayoutInflater(),
+                col(R.attr.cFg), col(R.attr.cFgSubtle), col(R.attr.cFgSubtlest),
+                col(R.attr.cSuccess), col(R.attr.cWarning), col(R.attr.cDestructive));
         todoList.setAdapter(todoAdapter);
-        todoAdapter.setListener(new TodoAdapter.Listener() {
-            @Override public void onToggle(int pos) { TodoStore.toggle(MainActivity.this, pos); reloadTodo(); }
-            @Override public void onDelete(int pos) { TodoStore.remove(MainActivity.this, pos); reloadTodo(); }
-        });
-        todoAddBtn.setOnClickListener(v -> {
-            String t = todoInput.getText().toString().trim();
-            if (t.isEmpty()) return;
-            TodoStore.add(MainActivity.this, t);
-            todoInput.setText("");
-            reloadTodo();
-        });
-        reloadTodo();
-    }
 
-    private void reloadTodo() {
-        todoAdapter.setData(TodoStore.load(this));
-    }
-
-    /* ================= SETELAN ================= */
-
-    private void setupSettings() {
-        String type = Prefs.get(this, "provider_type", "zai");
-        (type.equals("custom") ? providerCustom : providerZai).setChecked(true);
-        apiKeyInput.setText(Prefs.activeApiKey(this));
-        baseUrlInput.setText("custom".equals(type) ? Prefs.get(this, "custom_base_url", "") : "");
-        baseUrlInput.setEnabled(type.equals("custom"));
-
-        modelAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, modelIds);
-        modelAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        modelSpinner.setAdapter(modelAdapter);
-
-        providerGroup.setOnCheckedChangeListener((g, id) -> {
-            boolean custom = id == R.id.providerCustom;
-            Prefs.set(this, "provider_type", custom ? "custom" : "zai");
-            baseUrlInput.setEnabled(custom);
-            if (!custom) baseUrlInput.setText("");
-            apiKeyInput.setText(Prefs.activeApiKey(this));
-            fillModels(null);
-            refreshHeader();
-        });
-
-        refreshModelsBtn.setOnClickListener(v -> fillModels(() -> toast("Daftar model diperbarui")));
-        fillModels(null);
-
-        themeGroup.setOnCheckedChangeListener((g, id) -> {
-            String t = id == R.id.themeDark ? "dark" : "light";
-            if (!t.equals(Prefs.get(this, "theme", "light"))) {
-                Prefs.set(this, "theme", t);
-                recreate();
-            }
-        });
-        (dark ? themeDark : themeLight).setChecked(true);
-
-        testBtn.setOnClickListener(v -> {
-            saveSettings();
-            testResult.setText("⏳ Menguji koneksi…");
-            final String bu = Prefs.activeBaseUrl(this);
-            final String key = Prefs.activeApiKey(this);
-            if (key.isEmpty()) { testResult.setText("❌ API key masih kosong"); return; }
-            LlmClient.testConnection(bu, key, (ok, msg) -> ui.post(() ->
-                    testResult.setText(ok ? "✅ " + msg : "❌ " + msg)));
-        });
-    }
-
-    private void saveSettings() {
-        String type = Prefs.get(this, "provider_type", "zai");
-        if ("custom".equals(type)) {
-            Prefs.set(this, "custom_api_key", apiKeyInput.getText().toString().trim());
-            Prefs.set(this, "custom_base_url", baseUrlInput.getText().toString().trim());
-        } else {
-            Prefs.set(this, "zai_api_key", apiKeyInput.getText().toString().trim());
-        }
-        Object sel = modelSpinner.getSelectedItem();
-        if (sel != null) {
-            String m = sel.toString();
-            if (!m.isEmpty() && !m.startsWith("(") && !m.startsWith("⚠"))
-                Prefs.set(this, "model_" + type, m);
-        }
+        refreshSessions();
+        updateModeChip();
+        updateModelChip();
+        updateThemeButton();
+        bindSettings();
+        refreshEmptyState();
+        greeting();
+        switchPage(0);
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        saveSettings();
-        saveCurrentSession();
+        persistSettings();
+        saveSession(null);
     }
 
-    /** Isi spinner model. Untuk custom → fetch /models. cb null = senyap. */
-    private void fillModels(final Runnable done) {
-        String type = Prefs.get(this, "provider_type", "zai");
-        modelIds.clear();
-        if ("custom".equals(type)) {
-            String bu = baseUrlInput.getText().toString().trim();
-            String key = apiKeyInput.getText().toString().trim();
-            if (bu.isEmpty()) {
-                modelIds.add("(isi Base URL dulu)");
-                modelAdapter.notifyDataSetChanged();
-                return;
-            }
-            if (bu.endsWith("/")) bu = bu.substring(0, bu.length() - 1);
-            final String fbu = bu;
-            LlmClient.fetchModels(fbu, key, new LlmClient.ModelsCallback() {
-                @Override public void onModels(List<String> ids) {
-                    ui.post(() -> {
-                        modelIds.clear();
-                        modelIds.addAll(ids);
-                        if (modelIds.isEmpty()) modelIds.add("(tidak ada model)");
-                        // simpan utk model picker header
-                        JSONArray arr = new JSONArray();
-                        for (String id : ids) arr.put(id);
-                        Prefs.set(MainActivity.this, "custom_models", arr.toString());
-                        modelAdapter.notifyDataSetChanged();
-                        selectSavedModel();
-                        if (done != null) done.run();
-                    });
-                }
-                @Override public void onError(String message) {
-                    ui.post(() -> {
-                        modelIds.clear();
-                        modelIds.add("⚠ gagal: " + message);
-                        modelAdapter.notifyDataSetChanged();
-                        if (done != null) done.run();
-                    });
-                }
-            });
+    private int col(int attr) {
+        TypedValue tv = new TypedValue();
+        getTheme().resolveAttribute(attr, tv, true);
+        return tv.data;
+    }
+
+    private int dp(int v) {
+        return (int) (v * getResources().getDisplayMetrics().density);
+    }
+
+    /* ================================ DRAWER ================================ */
+
+    private void openDrawer() {
+        drawerPanel.setVisibility(View.VISIBLE);
+        scrim.setVisibility(View.VISIBLE);
+        scrim.setAlpha(0f);
+        scrim.animate().alpha(1f).setDuration(200).start();
+        drawerPanel.animate().translationX(0f).setDuration(220).start();
+    }
+
+    private void closeDrawer() {
+        scrim.animate().alpha(0f).setDuration(180).start();
+        drawerPanel.animate().translationX(-dp(320)).setDuration(200)
+                .withEndAction(() -> {
+                    drawerPanel.setVisibility(View.GONE);
+                    scrim.setVisibility(View.GONE);
+                }).start();
+    }
+
+    private boolean drawerOpen() {
+        return drawerPanel.getVisibility() == View.VISIBLE;
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (drawerOpen()) closeDrawer();
+        else super.onBackPressed();
+    }
+
+    /* ================================ THEME ================================ */
+
+    private void applyTheme() {
+        String t = Prefs.themeMode(this);
+        boolean dark;
+        if ("dark".equals(t)) dark = true;
+        else if ("system".equals(t)) {
+            int m = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+            dark = m == Configuration.UI_MODE_NIGHT_YES;
+        } else dark = false;
+        setTheme(dark ? R.style.AppTheme_Dark : R.style.AppTheme);
+    }
+
+    private void updateThemeButton() {
+        String t = Prefs.themeMode(this);
+        if ("dark".equals(t)) {
+            imgTheme.setImageResource(R.drawable.ic_moon);
+            txtTheme.setText("Tema: Gelap");
+        } else if ("system".equals(t)) {
+            imgTheme.setImageResource(R.drawable.ic_cpu);
+            txtTheme.setText("Tema: Sistem");
         } else {
-            modelIds.addAll(java.util.Arrays.asList(Prefs.zaiModels()));
-            modelAdapter.notifyDataSetChanged();
-            selectSavedModel();
-            if (done != null) done.run();
+            imgTheme.setImageResource(R.drawable.ic_sun);
+            txtTheme.setText("Tema: Terang");
+        }
+        String[] order = {"light", "dark", "system"};
+        String label;
+        int idx = "dark".equals(t) ? 1 : ("system".equals(t) ? 2 : 0);
+        label = order[(idx + 1) % 3];
+        btnThemeTag = label;
+    }
+
+    private String btnThemeTag = "dark";
+
+    /* ================================ BINDING ================================ */
+
+    private void bindViews() {
+        scrim = findViewById(R.id.scrim);
+        drawerPanel = findViewById(R.id.drawerPanel);
+        drawerPanel.setTranslationX(-dp(320));
+        txtWsName = findViewById(R.id.txtWsName);
+        txtModel = findViewById(R.id.txtModel);
+        txtStatus = findViewById(R.id.txtStatus);
+        txtTokens = findViewById(R.id.txtTokens);
+        txtMode = findViewById(R.id.txtMode);
+        txtTheme = findViewById(R.id.txtTheme);
+        txtGreeting = findViewById(R.id.txtGreeting);
+        txtSelModel = findViewById(R.id.txtSelModel);
+        txtTest = findViewById(R.id.txtTest);
+        txtFilesPath = findViewById(R.id.txtFilesPath);
+        statusStrip = findViewById(R.id.statusStrip);
+        emptyState = findViewById(R.id.emptyState);
+        btnSend = findViewById(R.id.btnSend);
+        imgMode = findViewById(R.id.imgMode);
+        imgTheme = findViewById(R.id.imgTheme);
+        etInput = findViewById(R.id.etInput);
+        etApiKey = findViewById(R.id.etApiKey);
+        etBaseUrl = findViewById(R.id.etBaseUrl);
+        etSessionSearch = findViewById(R.id.etSessionSearch);
+        etNewTodo = findViewById(R.id.etNewTodo);
+        chatList = findViewById(R.id.chatList);
+        fileList = findViewById(R.id.fileList);
+        todoList = findViewById(R.id.todoList);
+        sessionList = findViewById(R.id.sessionList);
+        pageFiles = findViewById(R.id.pageFiles);
+        pageTodo = findViewById(R.id.pageTodo);
+        pageSettings = findViewById(R.id.pageSettings);
+        pageTerminal = findViewById(R.id.pageTerminal);
+        pageChat = findViewById(R.id.pageChat);
+        tvTermOut = findViewById(R.id.tvTermOut);
+        etTermInput = findViewById(R.id.etTermInput);
+        scrollTerm = findViewById(R.id.scrollTerm);
+        txtWsName.setText(workspace.getName() + " · " + workspace.listFiles().length + " item");
+    }
+
+    private void bindListeners() {
+        findViewById(R.id.btnMenu).setOnClickListener(v -> openDrawer());
+        findViewById(R.id.btnModel).setOnClickListener(v -> showModelPicker());
+        findViewById(R.id.btnMode).setOnClickListener(v -> showModePicker());
+        findViewById(R.id.btnNewTask).setOnClickListener(v -> newTask());
+        findViewById(R.id.btnTheme).setOnClickListener(v -> {
+            if (busy) { toast("Hentikan agent dulu"); return; }
+            Prefs.set(this, "theme_mode", btnThemeTag);
+            recreate();
+        });
+        findViewById(R.id.scrim).setOnClickListener(v -> closeDrawer());
+        findViewById(R.id.btnDrawerSettings).setOnClickListener(v -> {
+            switchPage(4);
+            closeDrawer();
+        });
+        etSessionSearch.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            public void afterTextChanged(Editable s) { refreshSessions(); }
+        });
+
+        btnSend.setOnClickListener(v -> {
+            if (busy) {
+                engine.cancel();
+                toast("Dihentikan");
+            } else {
+                send();
+            }
+        });
+        findViewById(R.id.btnAttach).setOnClickListener(v -> pickAttachment());
+        findViewById(R.id.sug1).setOnClickListener(v -> fillSuggest("Buatkan aplikasi kalkulator sederhana (HTML+JS) di workspace ini."));
+        findViewById(R.id.sug2).setOnClickListener(v -> fillSuggest("Buat halaman web portofolio pribadi yang bagus."));
+        findViewById(R.id.sug3).setOnClickListener(v -> fillSuggest("Jelaskan isi workspace saya dan berikan ringkasan."));
+        findViewById(R.id.sug4).setOnClickListener(v -> fillSuggest("Periksa dan rapikan semua file kode di workspace."));
+
+        findViewById(R.id.navChat).setOnClickListener(v -> switchPage(0));
+        findViewById(R.id.navFiles).setOnClickListener(v -> switchPage(1));
+        findViewById(R.id.navTerminal).setOnClickListener(v -> switchPage(2));
+        findViewById(R.id.navTodo).setOnClickListener(v -> switchPage(3));
+        findViewById(R.id.navSettings).setOnClickListener(v -> switchPage(4));
+
+        // Berkas
+        findViewById(R.id.btnRefreshFiles).setOnClickListener(v -> { filesAdapter.reload(currentSub); refreshHeader(); });
+        txtFilesPath.setOnClickListener(v -> {
+            if (!currentSub.isEmpty()) {
+                File cur = new File(workspace, currentSub);
+                File parent = cur.getParentFile();
+                currentSub = parent == null || parent.equals(workspace) ? "" : workspace.getName().equals(parent.getName()) ? "" : workspace.toPath().relativize(parent.toPath()).toString();
+                filesAdapter.reload(currentSub);
+                refreshHeader();
+            }
+        });
+        fileList.setOnItemClickListener((p, v, pos, id) -> {
+            File f = filesAdapter.items.get(pos);
+            if (f.isDirectory()) {
+                currentSub = currentSub.isEmpty() ? f.getName() : currentSub + "/" + f.getName();
+                filesAdapter.reload(currentSub);
+                refreshHeader();
+            } else {
+                editFileDialog(f);
+            }
+        });
+        fileList.setOnItemLongClickListener((p, v, pos, id) -> {
+            File f = filesAdapter.items.get(pos);
+            new AlertDialog.Builder(this)
+                    .setTitle("Hapus " + f.getName() + "?")
+                    .setPositiveButton("Hapus", (d, w) -> {
+                        deleteRec(f);
+                        filesAdapter.reload(currentSub);
+                        toast("Dihapus");
+                    })
+                    .setNegativeButton("Batal", null).show();
+            return true;
+        });
+
+        // Todo
+        findViewById(R.id.btnAddTodo).setOnClickListener(v -> {
+            String t = etNewTodo.getText().toString().trim();
+            if (!t.isEmpty()) {
+                TodoStore.add(this, t);
+                etNewTodo.setText("");
+                todoAdapter = new TodoAdapter(TodoStore.load(this), getLayoutInflater(),
+                        col(R.attr.cFg), col(R.attr.cFgSubtle), col(R.attr.cFgSubtlest),
+                        col(R.attr.cSuccess), col(R.attr.cWarning), col(R.attr.cDestructive));
+                todoList.setAdapter(todoAdapter);
+            }
+        });
+        findViewById(R.id.btnClearDone).setOnClickListener(v -> {
+            TodoStore.clearDone(this);
+            todoList.setAdapter(new TodoAdapter(TodoStore.load(this), getLayoutInflater(),
+                    col(R.attr.cFg), col(R.attr.cFgSubtle), col(R.attr.cFgSubtlest),
+                    col(R.attr.cSuccess), col(R.attr.cWarning), col(R.attr.cDestructive)));
+        });
+        todoList.setOnItemClickListener((p, v, pos, id) -> {
+            TodoStore.cycle(this, pos);
+            todoList.setAdapter(new TodoAdapter(TodoStore.load(this), getLayoutInflater(),
+                    col(R.attr.cFg), col(R.attr.cFgSubtle), col(R.attr.cFgSubtlest),
+                    col(R.attr.cSuccess), col(R.attr.cWarning), col(R.attr.cDestructive)));
+        });
+        todoList.setOnItemLongClickListener((p, v, pos, id) -> {
+            TodoStore.remove(this, pos);
+            todoList.setAdapter(new TodoAdapter(TodoStore.load(this), getLayoutInflater(),
+                    col(R.attr.cFg), col(R.attr.cFgSubtle), col(R.attr.cFgSubtlest),
+                    col(R.attr.cSuccess), col(R.attr.cWarning), col(R.attr.cDestructive)));
+            return true;
+        });
+
+        // Terminal
+        findViewById(R.id.btnTermSend).setOnClickListener(v -> runTermCommand());
+        findViewById(R.id.btnTermHist).setOnClickListener(v -> termHistNext());
+        findViewById(R.id.btnTermHist).setOnLongClickListener(v -> { termHistPrev(); return true; });
+        findViewById(R.id.btnTermClear).setOnClickListener(v -> {
+            tvTermOut.setText("");
+            termBanner(false);
+        });
+        findViewById(R.id.btnTermRestart).setOnClickListener(v -> {
+            if (termShell != null) termShell.kill();
+            termShell = new ShellSession(workspace);
+            tvTermOut.setText("");
+            termBanner(true);
+            toast("Sesi shell baru dimulai");
+        });
+        etTermInput.setOnEditorActionListener((tv, actionId, ev) -> {
+            runTermCommand();
+            return true;
+        });
+        bindTermChip(R.id.termChipLs);
+        bindTermChip(R.id.termChipPwd);
+        bindTermChip(R.id.termChipDf);
+        bindTermChip(R.id.termChipPs);
+        bindTermChip(R.id.termChipDate);
+        bindTermChip(R.id.termChipCpu);
+
+        // Setelan
+        findViewById(R.id.btnPickModel).setOnClickListener(v -> showModelPicker());
+        findViewById(R.id.btnTest).setOnClickListener(v -> testConnection());
+    }
+
+    /* ================================ PAGES ================================ */
+
+    private void switchPage(int idx) {
+        activePage = idx;
+        pageChat.setVisibility(idx == 0 ? View.VISIBLE : View.GONE);
+        pageFiles.setVisibility(idx == 1 ? View.VISIBLE : View.GONE);
+        pageTerminal.setVisibility(idx == 2 ? View.VISIBLE : View.GONE);
+        pageTodo.setVisibility(idx == 3 ? View.VISIBLE : View.GONE);
+        pageSettings.setVisibility(idx == 4 ? View.VISIBLE : View.GONE);
+
+        int on = col(R.attr.cFg), off = col(R.attr.cFgSubtle);
+        tint(R.id.navChatIcon, idx == 0 ? on : off);       textCol(R.id.navChatText, idx == 0 ? on : off);
+        tint(R.id.navFilesIcon, idx == 1 ? on : off);      textCol(R.id.navFilesText, idx == 1 ? on : off);
+        tint(R.id.navTerminalIcon, idx == 2 ? on : off);   textCol(R.id.navTerminalText, idx == 2 ? on : off);
+        tint(R.id.navTodoIcon, idx == 3 ? on : off);       textCol(R.id.navTodoText, idx == 3 ? on : off);
+        tint(R.id.navSettingsIcon, idx == 4 ? on : off);   textCol(R.id.navSettingsText, idx == 4 ? on : off);
+        if (idx == 1) { filesAdapter.reload(currentSub); refreshHeader(); }
+        if (idx == 2) termEnsureStarted();
+    }
+
+    private void tint(int id, int color) {
+        View v = findViewById(id);
+        if (v instanceof ImageView) ((ImageView) v).setColorFilter(color);
+    }
+
+    /* =============================== TERMINAL =============================== */
+
+    private void termEnsureStarted() {
+        if (termShell == null) termShell = new ShellSession(workspace);
+        if (!termShell.isAlive() && tvTermOut.length() == 0) {
+            try {
+                termShell.start();
+                termBanner(true);
+            } catch (Exception e) {
+                termBanner(false);
+                termAppend("(gagal menyalakan shell: " + e.getMessage() + ")\n",
+                        col(R.attr.cDestructive));
+            }
         }
     }
 
-    private void selectSavedModel() {
-        String saved = Prefs.activeModel(this);
-        for (int i = 0; i < modelIds.size(); i++) {
-            if (modelIds.get(i).equals(saved)) { modelSpinner.setSelection(i); return; }
+    private void termBanner(boolean withTips) {
+        termAppend("ZCode Terminal — sh (toybox) Android\n", col(R.attr.cSuccess));
+        if (withTips)
+            termAppend("Direktori kerja: workspace proyek. Contoh: ls -la · cat berkas.txt · df -h\n\n",
+                    col(R.attr.cFgSubtlest));
+    }
+
+    private void termAppend(CharSequence s, int color) {
+        android.text.Editable e = tvTermOut.getEditableText();
+        int start = e.length();
+        e.append(s);
+        e.setSpan(new android.text.style.ForegroundColorSpan(color),
+                start, e.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        // Jaga memori: buang awal bila terlalu panjang
+        if (e.length() > 250_000) e.delete(0, e.length() - 250_000);
+        scrollTerm.post(() -> scrollTerm.fullScroll(View.FOCUS_DOWN));
+    }
+
+    private void bindTermChip(int id) {
+        View v = findViewById(id);
+        if (v instanceof TextView)
+            v.setOnClickListener(c -> {
+                etTermInput.setText(((TextView) v).getText().toString());
+                runTermCommand();
+            });
+    }
+
+    private void runTermCommand() {
+        String cmd = etTermInput.getText().toString().trim();
+        if (cmd.isEmpty() || termBusy) return;
+        etTermInput.setText("");
+        hideKeyboard();
+
+        termEnsureStarted();
+        termShell.history.add(cmd);
+        termShell.historyCursor = termShell.history.size();
+
+        termAppend("$ " + cmd + "\n", col(R.attr.cSuccess));
+        int runStart = tvTermOut.length();
+        termAppend("menjalankan…\n", col(R.attr.cFgSubtlest));
+        termBusy = true;
+
+        final ShellSession sh = termShell;
+        new Thread(() -> {
+            ShellSession.Result r;
+            try {
+                r = sh.run(cmd, 120_000);
+            } catch (Exception e) {
+                r = new ShellSession.Result("(galat: " + e.getMessage() + ")", 1);
+            }
+            final ShellSession.Result rr = r;
+            ui.post(() -> {
+                // Hapus baris "menjalankan…"
+                android.text.Editable e = tvTermOut.getEditableText();
+                int nl = e.toString().indexOf('\n', runStart);
+                if (nl >= 0) e.delete(runStart, Math.min(nl + 1, e.length()));
+                termAppend(rr.output, col(R.attr.cCodeFg));
+                if (!rr.ok())
+                    termAppend("\n[exit " + rr.exitCode + "]\n", col(R.attr.cDestructive));
+                else
+                    termAppend("\n", col(R.attr.cCodeFg));
+                termBusy = false;
+            });
+        }, "zcode-term").start();
+    }
+
+    /** Tombol ↑: perintah berikutnya-mundur dalam riwayat. Tahan: maju. */
+    private void termHistPrev() {
+        if (termShell == null || termShell.history.isEmpty()) return;
+        if (termShell.historyCursor > 0) termShell.historyCursor--;
+        if (termShell.historyCursor >= 0 && termShell.historyCursor < termShell.history.size())
+            etTermInput.setText(termShell.history.get(termShell.historyCursor));
+    }
+
+    private void termHistNext() {
+        if (termShell == null || termShell.history.isEmpty()) return;
+        if (termShell.historyCursor < termShell.history.size() - 1) {
+            termShell.historyCursor++;
+            etTermInput.setText(termShell.history.get(termShell.historyCursor));
+        } else {
+            termShell.historyCursor = termShell.history.size();
+            etTermInput.setText("");
         }
     }
 
-    private void toast(String msg) { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show(); }
+    private void textCol(int id, int color) {
+        View v = findViewById(id);
+        if (v instanceof TextView) ((TextView) v).setTextColor(color);
+    }
 
-    /* ================= WELCOME ================= */
+    /* ============================== CHAT & ENGINE ============================== */
 
-    private void ensureWelcomeFile(File ws) {
-        File hello = new File(ws, "hello.html");
-        if (hello.exists()) return;
+    private void send() {
+        final String text = etInput.getText().toString().trim();
+        if (text.isEmpty()) return;
+        etInput.setText("");
+        hideKeyboard();
+
+        if (Prefs.activeApiKey(this).isEmpty()) {
+            addNote("API Key belum diisi. Buka Setelan → Penyedia Model.");
+            switchPage(4);
+            return;
+        }
+
+        ChatItem u = new ChatItem(ChatItem.TYPE_USER);
+        u.text = text;
+        chatItems.add(u);
+        refreshEmptyState();
+        chatAdapter.notifyDataSetChanged();
+        scrollBottom();
+
+        startEngine(text);
+    }
+
+    private void startEngine(String userText) {
+        busy = true;
+        startedAt = System.currentTimeMillis();
+        tokensP = 0; tokensC = 0;
+        currentAssistant = null;
+        toolCards.clear();
+
+        LlmClient client = new LlmClient(Prefs.activeBaseUrl(this),
+                Prefs.activeApiKey(this), Prefs.activeModel(this));
+        engine.setClient(client);
+        setSendState(true);
+        statusStrip.setVisibility(View.VISIBLE);
+        statusBase = "Berpikir…";
+        txtStatus.setText(statusBase);
+        startTimer();
+        refreshEmptyState();
+
+        // Judul sesi dari pesan pertama
+        String title = null;
+        if (chatItems.size() <= 1) {
+            title = userText.length() > 42 ? userText.substring(0, 42) + "…" : userText;
+            if (title.trim().isEmpty()) title = "Tugas baru";
+        }
+        final String t = title;
+        engine.send(userText);
+        saveSession(t);
+        refreshSessions();
+    }
+
+    private AgentEngine.Callbacks engineCallbacks() {
+        return new AgentEngine.Callbacks() {
+            @Override public void onDelta(String piece) {
+                if (currentAssistant == null) {
+                    currentAssistant = new ChatItem(ChatItem.TYPE_ASSISTANT);
+                    chatItems.add(currentAssistant);
+                }
+                currentAssistant.text += piece;
+                throttledNotify();
+            }
+
+            @Override public void onToolStart(String callId, String name, String detail) {
+                flushAssistant();
+                ChatItem t = new ChatItem(ChatItem.TYPE_TOOL);
+                t.toolName = name;
+                t.toolDetail = detail;
+                t.toolStatus = ChatItem.ST_RUNNING;
+                toolCards.put(callId, t);
+                chatItems.add(t);
+                statusBase = detail.isEmpty() ? "Menjalankan " + name : detail;
+                chatAdapter.notifyDataSetChanged();
+                scrollBottom();
+            }
+
+            @Override public void onToolEnd(String callId, int status, String output) {
+                ChatItem t = toolCards.get(callId);
+                if (t != null) {
+                    t.toolStatus = status;
+                    t.text = output;
+                }
+                chatAdapter.notifyDataSetChanged();
+                saveSession(null);
+            }
+
+            @Override public void onUsage(int pt, int ct) {
+                tokensP = pt; tokensC = ct;
+                txtTokens.setText("· " + fmtTokens(tokensP + tokensC) + " token");
+            }
+
+            @Override public void onStatus(String s) {
+                statusBase = s;
+                txtStatus.setText(s);
+            }
+
+            @Override public void onError(String message) {
+                flushAssistant();
+                addNote("⚠ " + message);
+                chatAdapter.notifyDataSetChanged();
+                scrollBottom();
+            }
+
+            @Override public void onDone(String reason) {
+                busy = false;
+                stopTimer();
+                statusStrip.setVisibility(View.GONE);
+                setSendState(false);
+                flushAssistant();
+                chatAdapter.notifyDataSetChanged();
+                saveSession(null);
+                refreshSessions();
+                refreshEmptyState();
+                filesAdapter.reload(currentSub);
+            }
+        };
+    }
+
+    private void flushAssistant() {
+        if (currentAssistant != null && currentAssistant.text.isEmpty()) {
+            chatItems.remove(currentAssistant);
+        }
+        currentAssistant = null;
+    }
+
+    private void throttledNotify() {
+        long now = System.currentTimeMillis();
+        if (now - lastNotify > 140) {
+            lastNotify = now;
+            chatAdapter.notifyDataSetChanged();
+            scrollBottom();
+        } else {
+            ui.removeCallbacks(notifyRun);
+            ui.postDelayed(notifyRun, 160);
+        }
+    }
+
+    private final Runnable notifyRun = new Runnable() {
+        @Override public void run() {
+            chatAdapter.notifyDataSetChanged();
+            scrollBottom();
+        }
+    };
+
+    private void scrollBottom() {
+        chatList.post(() -> chatList.setSelection(chatItems.size() - 1));
+    }
+
+    private void addNote(String s) {
+        ChatItem n = new ChatItem(ChatItem.TYPE_NOTE);
+        n.text = s;
+        chatItems.add(n);
+    }
+
+    private void refreshEmptyState() {
+        boolean empty = chatItems.isEmpty();
+        emptyState.setVisibility(empty ? View.VISIBLE : View.GONE);
+        if (empty) greeting();
+    }
+
+    private void greeting() {
+        int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        String g;
+        if (h >= 4 && h < 10) g = "Pagi, ada yang bisa saya bantu?";
+        else if (h >= 10 && h < 15) g = "Siang! Serahkan sisanya pada saya.";
+        else if (h >= 15 && h < 18) g = "Sore, apa yang bisa saya kerjakan?";
+        else if (h >= 18 && h < 22) g = "Malam, kerja bagus hari ini";
+        else g = "Sudah malam—jangan lupa istirahat.";
+        txtGreeting.setText(g);
+    }
+
+    private void fillSuggest(String s) {
+        etInput.setText(s);
+        etInput.requestFocus();
+        etInput.setSelection(s.length());
+    }
+
+    private void setSendState(boolean running) {
+        if (running) {
+            btnSend.setImageResource(R.drawable.ic_stop);
+            btnSend.setColorFilter(col(R.attr.cDestructive));
+            btnSend.setBackgroundResource(R.drawable.bg_chip);
+        } else {
+            btnSend.setImageResource(R.drawable.ic_arrow_up);
+            btnSend.setColorFilter(col(R.attr.cBrandFg));
+            btnSend.setBackgroundResource(R.drawable.bg_send);
+        }
+    }
+
+    private void startTimer() {
+        timerRun = new Runnable() {
+            @Override public void run() {
+                if (!busy) return;
+                long d = (System.currentTimeMillis() - startedAt) / 1000;
+                txtStatus.setText(statusBase + " · " + d + " dtk");
+                ui.postDelayed(this, 1000);
+            }
+        };
+        ui.postDelayed(timerRun, 1000);
+    }
+
+    private void stopTimer() {
+        if (timerRun != null) ui.removeCallbacks(timerRun);
+    }
+
+    private static String fmtTokens(int t) {
+        if (t >= 1000) {
+            double k = t / 1000.0;
+            return String.format(java.util.Locale.US, "%.1frb", k).replace(".", ",");
+        }
+        return String.valueOf(t);
+    }
+
+    private void hideKeyboard() {
         try {
-            String html = "<!DOCTYPE html>\n<html lang=\"id\">\n<head>\n<meta charset=\"utf-8\">\n"
-                    + "<title>Halo dari ZCode Mobile</title>\n"
-                    + "<style>body{font-family:sans-serif;background:#0a0a0a;color:#fafafa;"
-                    + "display:flex;align-items:center;justify-content:center;height:100vh;margin:0}\n"
-                    + "h1{font-size:2em;font-style:italic}p{opacity:.6}</style>\n</head>\n<body>\n<div style=\"text-align:center\">\n"
-                    + "<h1>Z</h1>\n<p>ZCode Mobile — berkas pertamamu.<br>Minta agent mengubahnya!</p>\n</div>\n"
-                    + "</body>\n</html>\n";
-            FileOutputStream fos = new FileOutputStream(hello);
-            fos.write(html.getBytes(StandardCharsets.UTF_8));
-            fos.close();
+            InputMethodManager im = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            im.hideSoftInputFromWindow(etInput.getWindowToken(), 0);
         } catch (Exception ignore) { }
     }
+
+    private void toast(String s) {
+        android.widget.Toast.makeText(this, s, android.widget.Toast.LENGTH_SHORT).show();
+    }
+
+    /* ============================== MODE & MODEL ============================== */
+
+    private void updateModeChip() {
+        String m = Prefs.agentMode(this);
+        txtMode.setText(modeLabel(m));
+        imgMode.setImageResource(modeIcon(m));
+        imgMode.setColorFilter(col(R.attr.cFgSubtle));
+    }
+
+    public static String modeLabel(String m) {
+        switch (m) {
+            case Prefs.MODE_EDIT: return "Ubah otomatis";
+            case Prefs.MODE_PLAN: return "Mode rencana";
+            case Prefs.MODE_YOLO: return "Akses penuh";
+            default: return "Tanya dulu";
+        }
+    }
+
+    private static int modeIcon(String m) {
+        switch (m) {
+            case Prefs.MODE_EDIT: return R.drawable.ic_pen;
+            case Prefs.MODE_PLAN: return R.drawable.ic_target;
+            case Prefs.MODE_YOLO: return R.drawable.ic_terminal;
+            default: return R.drawable.ic_help;
+        }
+    }
+
+    private static String modeDesc(String m) {
+        switch (m) {
+            case Prefs.MODE_EDIT: return "Edit berkas otomatis tanpa bertanya.";
+            case Prefs.MODE_PLAN: return "Teliti kode dan sajikan rencana sebelum mengedit.";
+            case Prefs.MODE_YOLO: return "Edit dan jalankan dengan lebih sedikit konfirmasi.";
+            default: return "Tanyakan sebelum setiap perubahan berkas.";
+        }
+    }
+
+    private void showModePicker() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        String[] modes = {Prefs.MODE_BUILD, Prefs.MODE_EDIT, Prefs.MODE_PLAN, Prefs.MODE_YOLO};
+        String cur = Prefs.agentMode(this);
+        final AlertDialog[] holder = new AlertDialog[1];
+        for (final String m : modes) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.VERTICAL);
+            int px = (int) (14 * getResources().getDisplayMetrics().density);
+            row.setPadding(px, px, px, px);
+            row.setBackgroundResource(R.drawable.bg_selectable);
+            TextView t = new TextView(this);
+            t.setText((m.equals(cur) ? "●  " : "○  ") + modeLabel(m));
+            t.setTextSize(15);
+            t.setTypeface(null, Typeface.BOLD);
+            t.setTextColor(col(R.attr.cFg));
+            TextView d = new TextView(this);
+            d.setText(modeDesc(m));
+            d.setTextSize(12);
+            d.setTextColor(col(R.attr.cFgSubtle));
+            row.addView(t);
+            row.addView(d);
+            row.setOnClickListener(v -> {
+                Prefs.set(this, "agent_mode", m);
+                tools.mode = m;
+                updateModeChip();
+                if (holder[0] != null) holder[0].dismiss();
+                addNote("Mode agent: " + modeLabel(m));
+                chatAdapter.notifyDataSetChanged();
+            });
+            box.addView(row);
+        }
+        ScrollView sc = new ScrollView(this);
+        sc.addView(box);
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle("Ganti mode");
+        b.setView(sc);
+        holder[0] = buildShownDialog(b, sc);
+    }
+
+    /** Tampilkan dialog dengan latar kartu tema. */
+    private AlertDialog buildShownDialog(AlertDialog.Builder b, View content) {
+        AlertDialog dlg = b.show();
+        dlg.getWindow().setBackgroundDrawableResource(R.drawable.bg_dialog);
+        return dlg;
+    }
+
+    private void updateModelChip() {
+        txtModel.setText(Prefs.prettyModel(Prefs.activeModel(this)));
+    }
+
+    private void showModelPicker() {
+        if ("custom".equals(Prefs.get(this, "provider_type", "zai"))) {
+            txtTest.setText("Memuat model dari penyedia kustom…");
+            LlmClient.fetchModels(Prefs.activeBaseUrl(this), Prefs.activeApiKey(this),
+                    new LlmClient.ModelsCallback() {
+                        @Override public void onModels(List<String> ids) {
+                            runOnUiThread(() -> pickFromList("Pilih model", ids.toArray(new String[0]), null));
+                        }
+                        @Override public void onError(String message) {
+                            runOnUiThread(() -> toast("Gagal memuat model: " + message));
+                        }
+                    });
+        } else {
+            String[] free = Prefs.zaiFreeModels();
+            String[] paid = Prefs.zaiPaidModels();
+            List<String> all = new ArrayList<>();
+            for (String s : free) all.add(s);
+            for (String s : paid) all.add(s);
+            pickFromList("Pilih model", all.toArray(new String[0]), free);
+        }
+    }
+
+    private void pickFromList(String title, String[] ids, String[] freeIds) {
+        List<String> freeList = new ArrayList<>();
+        if (freeIds != null) for (String f : freeIds) freeList.add(f);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        String cur = Prefs.activeModel(this);
+        boolean headerDone = false;
+        for (final String id : ids) {
+            boolean free = freeList.contains(id);
+            if (freeIds != null && free && !headerDone) {
+                box.addView(sectionLabel("GRATIS"));
+                headerDone = true;
+            }
+            if (freeIds != null && headerDone && !free) {
+                box.addView(sectionLabel("BERBAYAR"));
+                headerDone = false;
+                // tandai agar label tak diulang
+            }
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            int px = (int) (14 * getResources().getDisplayMetrics().density);
+            row.setPadding(px, px, px, px);
+            row.setBackgroundResource(R.drawable.bg_selectable);
+            TextView t = new TextView(this);
+            t.setText(Prefs.prettyModel(id) + (id.equals(cur) ? "  ✓" : ""));
+            t.setTextSize(14);
+            t.setTextColor(col(R.attr.cFg));
+            t.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            row.addView(t);
+            if (free) {
+                TextView badge = new TextView(this);
+                badge.setText("GRATIS");
+                badge.setTextSize(10);
+                badge.setTextColor(0xFF1E8A3E);
+                badge.setBackgroundResource(R.drawable.bg_badge_free);
+                int p2 = (int) (6 * getResources().getDisplayMetrics().density);
+                badge.setPadding(p2, 2, p2, 2);
+                row.addView(badge);
+            }
+            row.setOnClickListener(v -> {
+                Prefs.set(this, "model_" + Prefs.get(this, "provider_type", "zai"), id);
+                updateModelChip();
+                txtSelModel.setText(Prefs.prettyModel(id));
+                if (dialogHolder[0] != null) dialogHolder[0].dismiss();
+                toast("Model: " + Prefs.prettyModel(id));
+            });
+            box.addView(row);
+        }
+        ScrollView sc = new ScrollView(this);
+        sc.addView(box);
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle(title);
+        b.setView(sc);
+        dialogHolder[0] = buildShownDialog(b, sc);
+    }
+
+    private final AlertDialog[] dialogHolder = new AlertDialog[1];
+
+    private TextView sectionLabel(String s) {
+        TextView tv = new TextView(this);
+        tv.setText(s);
+        tv.setTextSize(11);
+        tv.setTypeface(null, Typeface.BOLD);
+        tv.setTextColor(col(R.attr.cFgSubtlest));
+        int px = (int) (14 * getResources().getDisplayMetrics().density);
+        tv.setPadding(px, px / 2, px, px / 4);
+        return tv;
+    }
+
+    /* ============================== SESI / DRAWER ============================== */
+
+    private void refreshSessions() {
+        List<SessionStore.Meta> all = SessionStore.list(this);
+        String q = etSessionSearch.getText().toString().trim().toLowerCase();
+        List<SessionStore.Meta> filtered = new ArrayList<>();
+        for (SessionStore.Meta m : all) {
+            if (q.isEmpty() || m.title.toLowerCase().contains(q)) filtered.add(m);
+        }
+        sessionAdapter = new SessionAdapter(filtered, getLayoutInflater(),
+                col(R.attr.cFg), col(R.attr.cFgSubtlest), sessionId);
+        sessionAdapter.listener = new SessionAdapter.SessionListener() {
+            @Override public void onOpen(SessionStore.Meta m) { openSession(m.id); }
+            @Override public void onDelete(SessionStore.Meta m) {
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("Hapus tugas?")
+                        .setMessage(m.title)
+                        .setPositiveButton("Hapus", (d, w) -> {
+                            SessionStore.delete(MainActivity.this, m.id);
+                            if (m.id.equals(sessionId)) loadCurrentOrNew();
+                            refreshSessions();
+                        })
+                        .setNegativeButton("Batal", null).show();
+            }
+        };
+        sessionList.setAdapter(sessionAdapter);
+    }
+
+    private void loadCurrentOrNew() {
+        sessionId = SessionStore.currentId(this);
+        if (sessionId.isEmpty()) sessionId = SessionStore.create(this, "Tugas baru");
+        loadSession();
+    }
+
+    private void openSession(String id) {
+        if (busy) { toast("Hentikan agent dulu"); return; }
+        saveSession(null);
+        sessionId = id;
+        SessionStore.setCurrent(this, id);
+        tools.mode = SessionStore.loadMode(this, id);
+        Prefs.set(this, "agent_mode", tools.mode);
+        loadSession();
+        updateModeChip();
+        closeDrawer();
+    }
+
+    private void loadSession() {
+        chatItems.clear();
+        JSONArray saved = SessionStore.loadItems(this, sessionId);
+        for (int i = 0; i < saved.length(); i++) {
+            JSONObject o = saved.optJSONObject(i);
+            if (o != null) chatItems.add(ChatItem.fromJson(o));
+        }
+        chatAdapter.notifyDataSetChanged();
+        scrollBottom();
+        refreshEmptyState();
+        refreshSessions();
+        rebuildHistory();
+    }
+
+    /** Bangun ulang riwayat konteks model dari item chat (pesan user & assistant). */
+    private void rebuildHistory() {
+        JSONArray h = new JSONArray();
+        for (ChatItem it : chatItems) {
+            try {
+                if (it.type == ChatItem.TYPE_USER && !it.text.isEmpty()) {
+                    h.put(new JSONObject().put("role", "user").put("content", it.text));
+                } else if (it.type == ChatItem.TYPE_ASSISTANT && !it.text.isEmpty()) {
+                    h.put(new JSONObject().put("role", "assistant").put("content", it.text));
+                }
+            } catch (Exception ignore) { }
+        }
+        engine.replaceHistory(h);
+    }
+
+    private void newTask() {
+        if (busy) { toast("Hentikan agent dulu"); return; }
+        saveSession(null);
+        sessionId = SessionStore.create(this, "Tugas baru");
+        chatItems.clear();
+        chatAdapter.notifyDataSetChanged();
+        refreshEmptyState();
+        refreshSessions();
+        rebuildHistory();
+        closeDrawer();
+        switchPage(0);
+    }
+
+    private void saveSession(String newTitle) {
+        if (sessionId.isEmpty() || chatItems.isEmpty()) return;
+        JSONArray arr = new JSONArray();
+        for (ChatItem it : chatItems) arr.put(it.toJson());
+        SessionStore.save(this, sessionId, arr, Prefs.agentMode(this), newTitle);
+    }
+
+    /* ============================== BRIDGE UI TOOLS ============================== */
+
+    private Tools.UiBridge bridge() {
+        return new Tools.UiBridge() {
+            @Override public String askUser(final JSONArray questions) {
+                final StringBuilder answers = new StringBuilder();
+                final CountDownLatch latch = new CountDownLatch(1);
+                runOnUiThread(() -> askSequential(questions, 0, answers, latch));
+                try { latch.await(); } catch (InterruptedException ignore) { return null; }
+                return answers.length() == 0 ? null : answers.toString();
+            }
+
+            @Override public String submitPlan(final String plan) {
+                final CountDownLatch latch = new CountDownLatch(1);
+                final java.util.concurrent.atomic.AtomicReference<String> verdict =
+                        new java.util.concurrent.atomic.AtomicReference<>("rejected");
+                runOnUiThread(() -> {
+                    flushAssistant();
+                    ChatItem p = new ChatItem(ChatItem.TYPE_PLAN);
+                    p.text = plan;
+                    p.planResolved = false;
+                    chatItems.add(p);
+                    chatAdapter.notifyDataSetChanged();
+                    scrollBottom();
+                    planItem = p;
+                    planVerdict = verdict;
+                    pendingPlanLatch = latch;
+                });
+                try { latch.await(); } catch (InterruptedException ignore) { }
+                return verdict.get();
+            }
+
+            @Override public boolean permission(final String toolName, final String detail) {
+                if (allowAllSession) return true;
+                final CountDownLatch latch = new CountDownLatch(1);
+                final java.util.concurrent.atomic.AtomicBoolean ok = new java.util.concurrent.atomic.AtomicBoolean(false);
+                runOnUiThread(() -> {
+                    AlertDialog.Builder b = new AlertDialog.Builder(MainActivity.this);
+                    b.setTitle("Izin diperlukan");
+                    b.setMessage("ZCode ingin " + detail + ".\n\nIzinkan operasi ini?");
+                    b.setPositiveButton("Izinkan", (d, w) -> { ok.set(true); latch.countDown(); });
+                    b.setNegativeButton("Tolak", (d, w) -> latch.countDown());
+                    b.setNeutralButton("Selalu izinkan (sesi ini)", (d, w) -> { allowAllSession = true; ok.set(true); latch.countDown(); });
+                    AlertDialog dlg = b.show();
+                    dlg.getWindow().setBackgroundDrawableResource(R.drawable.bg_dialog);
+                });
+                try { latch.await(); } catch (InterruptedException ignore) { }
+                return ok.get();
+            }
+        };
+    }
+
+    private ChatItem planItem;
+    private java.util.concurrent.atomic.AtomicReference<String> planVerdict;
+    private CountDownLatch pendingPlanLatch;
+
+    @Override
+    public void onApprove(ChatItem item) {
+        item.planResolved = true;
+        chatAdapter.notifyDataSetChanged();
+        if (pendingPlanLatch != null && planItem == item) {
+            planVerdict.set("approved");
+            addNote("Rencana disetujui — agent melanjutkan ke implementasi…");
+            chatAdapter.notifyDataSetChanged();
+            pendingPlanLatch.countDown();
+            pendingPlanLatch = null;
+        }
+    }
+
+    @Override
+    public void onReject(ChatItem item) {
+        item.planResolved = true;
+        chatAdapter.notifyDataSetChanged();
+        if (pendingPlanLatch != null && planItem == item) {
+            planVerdict.set("rejected");
+            addNote("Rencana ditolak. Agent akan menanyakan perubahan yang diinginkan.");
+            chatAdapter.notifyDataSetChanged();
+            pendingPlanLatch.countDown();
+            pendingPlanLatch = null;
+        }
+    }
+
+    /** Tanyakan daftar pertanyaan satu per satu (AskUserQuestion). */
+    private void askSequential(final JSONArray questions, final int idx,
+                               final StringBuilder answers, final CountDownLatch done) {
+        if (idx >= questions.length()) { done.countDown(); return; }
+        JSONObject q = questions.optJSONObject(idx);
+        if (q == null) { done.countDown(); return; }
+        String question = q.optString("question", "");
+        String header = q.optString("header", "Pertanyaan");
+        JSONArray opts = q.optJSONArray("options");
+        if (opts == null || opts.length() == 0) {
+            answers.append(header).append(": ").append(question).append(" — (user melewati)\n");
+            askSequential(questions, idx + 1, answers, done);
+            return;
+        }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        for (int i = 0; i < opts.length() && i < 4; i++) {
+            JSONObject op = opts.optJSONObject(i);
+            if (op == null) continue;
+            final String label = op.optString("label", "Opsi " + (i + 1));
+            String desc = op.optString("description", "");
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.VERTICAL);
+            int px = (int) (14 * getResources().getDisplayMetrics().density);
+            row.setPadding(px, px, px, px);
+            row.setBackgroundResource(R.drawable.bg_selectable);
+            TextView t = new TextView(this);
+            t.setText(label);
+            t.setTextSize(14);
+            t.setTypeface(null, Typeface.BOLD);
+            t.setTextColor(col(R.attr.cAsk));
+            row.addView(t);
+            if (!desc.isEmpty()) {
+                TextView d = new TextView(this);
+                d.setText(desc);
+                d.setTextSize(12);
+                d.setTextColor(col(R.attr.cFgSubtle));
+                row.addView(d);
+            }
+            row.setOnClickListener(v -> {
+                answers.append(header).append(": ").append(question).append("\nJawaban: ").append(label);
+                if (desc.isEmpty()) answers.append("\n"); else answers.append(" — ").append(desc).append("\n");
+                if (dialogHolder[0] != null) dialogHolder[0].dismiss();
+                askSequential(questions, idx + 1, answers, done);
+            });
+            box.addView(row);
+        }
+        ScrollView sc = new ScrollView(this);
+        sc.addView(box);
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle(header.isEmpty() ? "Pertanyaan" : header);
+        b.setMessage(question);
+        b.setNegativeButton("Lewati", (d, w) -> {
+            answers.append(header).append(": ").append(question).append(" — (user melewati)\n");
+            askSequential(questions, idx + 1, answers, done);
+        });
+        // Sisipkan daftar opsi di atas tombol
+        LinearLayout outer = new LinearLayout(this);
+        outer.setOrientation(LinearLayout.VERTICAL);
+        TextView msg = new TextView(this);
+        int px2 = (int) (20 * getResources().getDisplayMetrics().density);
+        msg.setPadding(px2, px2 / 2, px2, px2 / 4);
+        msg.setText(question);
+        msg.setTextSize(14);
+        msg.setTextColor(col(R.attr.cFg));
+        outer.addView(msg);
+        outer.addView(box);
+        b.setMessage(null);
+        b.setView(outer);
+        dialogHolder[0] = buildShownDialog(b, outer);
+    }
+
+    /* ============================== ATTACHMENT ============================== */
+
+    private static final int REQ_ATTACH = 4711;
+
+    private void pickAttachment() {
+        Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        try {
+            startActivityForResult(Intent.createChooser(i, "Lampirkan berkas"), REQ_ATTACH);
+        } catch (Exception e) {
+            toast("Tidak bisa membuka pemilih berkas");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_ATTACH && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            try {
+                String name = queryName(data.getData());
+                java.io.InputStream is = getContentResolver().openInputStream(data.getData());
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = is.read(buf)) > 0) {
+                    bos.write(buf, 0, n);
+                    if (bos.size() > 120_000) break;
+                }
+                is.close();
+                String content = new String(bos.toByteArray(), StandardCharsets.UTF_8);
+                String cur = etInput.getText().toString();
+                String block = (cur.isEmpty() ? "" : cur + "\n\n") + "Konteks file \"" + name + "\":\n```\n" + content + "\n```";
+                etInput.setText(block);
+                etInput.requestFocus();
+                etInput.setSelection(block.length());
+            } catch (Exception e) {
+                toast("Gagal membaca lampiran");
+            }
+        }
+    }
+
+    private String queryName(android.net.Uri uri) {
+        try {
+            android.database.Cursor c = getContentResolver().query(uri, null, null, null, null);
+            if (c != null) {
+                int idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                if (c.moveToFirst() && idx >= 0) {
+                    String s = c.getString(idx);
+                    c.close();
+                    return s;
+                }
+                c.close();
+            }
+        } catch (Exception ignore) { }
+        return "lampiran.txt";
+    }
+
+    /* ============================== BERKAS ============================== */
+
+    private String currentSub = "";
+
+    private void refreshHeader() {
+        txtFilesPath.setText("workspace" + (currentSub.isEmpty() ? "" : "/" + currentSub));
+        txtWsName.setText(workspace.getName() + " · " + countFiles(workspace) + " berkas");
+    }
+
+    private int countFiles(File d) {
+        int n = 0;
+        File[] fs = d.listFiles();
+        if (fs != null) for (File f : fs) n += f.isDirectory() ? countFiles(f) : 1;
+        return n;
+    }
+
+    private void editFileDialog(final File f) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int px = (int) (16 * getResources().getDisplayMetrics().density);
+        box.setPadding(px, px / 2, px, 0);
+        TextView lbl = new TextView(this);
+        lbl.setText(f.getName());
+        lbl.setTextSize(13);
+        lbl.setTextColor(col(R.attr.cFgSubtle));
+        box.addView(lbl);
+        final EditText ed = new EditText(this);
+        ed.setBackgroundResource(R.drawable.bg_search);
+        ed.setPadding(px / 2, px / 3, px / 2, px / 3);
+        ed.setTextSize(13);
+        ed.setTextColor(col(R.attr.cFg));
+        ed.setTypeface(Typeface.MONOSPACE);
+        ed.setMinLines(6);
+        try {
+            FileInputStream fis = new FileInputStream(f);
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] b = new byte[8192];
+            int n;
+            while ((n = fis.read(b)) > 0) bos.write(b, 0, n);
+            fis.close();
+            String all = new String(bos.toByteArray(), StandardCharsets.UTF_8);
+            ed.setText(all.length() > 60000 ? all.substring(0, 60000) : all);
+        } catch (Exception ignore) { }
+        box.addView(ed);
+        new AlertDialog.Builder(this)
+                .setTitle("Edit berkas")
+                .setView(box)
+                .setPositiveButton("Simpan", (d, w) -> {
+                    try {
+                        FileOutputStream fos = new FileOutputStream(f);
+                        fos.write(ed.getText().toString().getBytes(StandardCharsets.UTF_8));
+                        fos.close();
+                        toast("Tersimpan");
+                        filesAdapter.reload(currentSub);
+                    } catch (Exception ignore) { }
+                })
+                .setNegativeButton("Batal", null).show();
+    }
+
+    private void deleteRec(File f) {
+        File[] fs = f.listFiles();
+        if (fs != null) for (File c : fs) deleteRec(c);
+        f.delete();
+    }
+
+    /* ============================== SETELAN ============================== */
+
+    private void bindSettings() {
+        String t = Prefs.themeMode(this);
+        ((RadioButton) findViewById(R.id.rbLight)).setChecked("light".equals(t));
+        ((RadioButton) findViewById(R.id.rbDark)).setChecked("dark".equals(t));
+        ((RadioButton) findViewById(R.id.rbSystem)).setChecked("system".equals(t));
+
+        String pt = Prefs.get(this, "provider_type", "zai");
+        ((RadioButton) findViewById(R.id.rbZai)).setChecked("zai".equals(pt));
+        ((RadioButton) findViewById(R.id.rbCustom)).setChecked("custom".equals(pt));
+        boolean custom = "custom".equals(pt);
+        findViewById(R.id.lblBaseUrl).setVisibility(custom ? View.VISIBLE : View.GONE);
+        etBaseUrl.setVisibility(custom ? View.VISIBLE : View.GONE);
+
+        ((RadioGroup) findViewById(R.id.rgTheme)).setOnCheckedChangeListener((g, id) -> {
+            String nt = id == R.id.rbDark ? "dark" : (id == R.id.rbSystem ? "system" : "light");
+            if (nt.equals(Prefs.themeMode(this))) return;
+            if (busy) {
+                toast("Hentikan agent dulu");
+                String cur = Prefs.themeMode(this);
+                ((RadioButton) findViewById(R.id.rbLight)).setChecked("light".equals(cur));
+                ((RadioButton) findViewById(R.id.rbDark)).setChecked("dark".equals(cur));
+                ((RadioButton) findViewById(R.id.rbSystem)).setChecked("system".equals(cur));
+                return;
+            }
+            Prefs.set(this, "theme_mode", nt);
+            recreate();
+        });
+        ((RadioGroup) findViewById(R.id.rgProvider)).setOnCheckedChangeListener((g, id) -> {
+            String np = id == R.id.rbCustom ? "custom" : "zai";
+            Prefs.set(this, "provider_type", np);
+            boolean cu = "custom".equals(np);
+            findViewById(R.id.lblBaseUrl).setVisibility(cu ? View.VISIBLE : View.GONE);
+            etBaseUrl.setVisibility(cu ? View.VISIBLE : View.GONE);
+            updateModelChip();
+        });
+
+        etApiKey.setText(Prefs.activeApiKey(this));
+        etBaseUrl.setText(Prefs.get(this, "custom_base_url", ""));
+        txtSelModel.setText(Prefs.prettyModel(Prefs.activeModel(this)));
+    }
+
+    private void persistSettings() {
+        Prefs.set(this, "zai_api_key", etApiKey.getText().toString().trim());
+        Prefs.set(this, "custom_api_key", etApiKey.getText().toString().trim());
+        Prefs.set(this, "custom_base_url", etBaseUrl.getText().toString().trim());
+    }
+
+    private void testConnection() {
+        persistSettings();
+        txtTest.setText("Menguji…");
+        LlmClient.testConnection(Prefs.activeBaseUrl(this), Prefs.activeApiKey(this),
+                (ok, msg) -> runOnUiThread(() -> {
+                    txtTest.setText(msg);
+                    txtTest.setTextColor(ok ? col(R.attr.cSuccess) : col(R.attr.cDestructive));
+                }));
+    }
+
+    /* ============================== UTIL ============================== */
 }
