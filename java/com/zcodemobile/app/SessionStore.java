@@ -99,6 +99,19 @@ public class SessionStore {
         } catch (Exception ignore) { }
     }
 
+    /** Ganti judul sesi (rename dari drawer). */
+    public static void rename(android.content.Context c, String id, String title) {
+        if (id == null || id.isEmpty() || title == null || title.trim().isEmpty()) return;
+        try {
+            File f = new File(dir(c), id + ".json");
+            if (!f.exists()) return;
+            JSONObject o = new JSONObject(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8));
+            o.put("title", title.trim());
+            o.put("updated", System.currentTimeMillis());
+            write(c, id, o);
+        } catch (Exception ignore) { }
+    }
+
     public static JSONArray loadItems(android.content.Context c, String id) {
         try {
             File f = new File(dir(c), id + ".json");

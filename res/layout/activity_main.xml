@@ -224,33 +224,25 @@
                         android:background="@drawable/bg_tool_card"
                         android:padding="12dp">
 
-                        <RadioGroup
-                            android:id="@+id/rgProvider"
+                        <TextView
+                            android:id="@+id/btnProvider"
                             android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:gravity="center_vertical"
+                            android:background="@drawable/bg_search"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp"
+                            android:text="Penyedia: Z.ai · GLM"
+                            android:textSize="14sp"
+                            android:textColor="?attr/cFg"/>
+
+                        <TextView
+                            android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:orientation="vertical">
-
-                            <RadioButton
-                                android:id="@+id/rbZai"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:minHeight="40dp"
-                                android:text="Z.ai · GLM (gratis tersedia)"
-                                android:textSize="14sp"
-                                android:textColor="?attr/cFg"
-                                android:checked="true"
-                                android:buttonTint="?attr/cFg"/>
-
-                            <RadioButton
-                                android:id="@+id/rbCustom"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:minHeight="40dp"
-                                android:text="Penyedia kustom (BYOK)"
-                                android:textSize="14sp"
-                                android:textColor="?attr/cFg"
-                                android:buttonTint="?attr/cFg"/>
-                        </RadioGroup>
+                            android:layout_marginTop="6dp"
+                            android:text="13 preset BYOK — daftar model diambil dari /models penyedia"
+                            android:textSize="11sp"
+                            android:textColor="?attr/cFgSubtlest"/>
 
                         <TextView
                             android:layout_width="wrap_content"

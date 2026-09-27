@@ -102,6 +102,12 @@ public class AgentEngine {
                 final int r = round;
                 main.post(() -> cb.onStatus("Berpikir… (ronde " + r + ")"));
 
+                // PERBAIKAN PENTING v2.3.0: system prompt KINI benar-benar dikirim.
+                // Sebelumnya buildSystemPrompt() tak pernah dipanggil sehingga agent
+                // berjalan tanpa instruksi (bahasa, mode, lingkungan toybox, tanggal).
+                ensureSystem();
+                trimHistory();
+
                 final StringBuilder textBuf = new StringBuilder();
                 final Box err = new Box();
                 final Box stop = new Box();
@@ -222,6 +228,54 @@ public class AgentEngine {
         }
     }
 
+    /**
+     * Sisipkan/perbarui pesan system di awal history (mode, model, AGENTS.md
+     * selalu terkini — memori proyek bisa berubah saat agent bekerja).
+     */
+    private void ensureSystem() {
+        try {
+            JSONArray body = new JSONArray();
+            for (int i = 0; i < history.length(); i++) {
+                JSONObject o = history.optJSONObject(i);
+                if (o != null && "system".equals(o.optString("role"))) continue;
+                body.put(history.get(i));
+            }
+            JSONObject sys = new JSONObject()
+                    .put("role", "system")
+                    .put("content", buildSystemPrompt(tools.mode, client.model(), tools.getWorkspace()));
+            JSONArray out = new JSONArray();
+            out.put(sys);
+            for (int i = 0; i < body.length(); i++) out.put(body.get(i));
+            history = out;
+        } catch (Exception ignore) { }
+    }
+
+    /**
+     * Jaga konteks tetap muat: buang pesan tertua (setelah system) bila total
+     * karakter melebihi anggaran — padanan sederhana context management ZCode.
+     */
+    private void trimHistory() {
+        try {
+            final int budget = 90_000; // ≈22k token
+            int total = 0;
+            for (int i = 0; i < history.length(); i++) {
+                JSONObject o = history.optJSONObject(i);
+                if (o != null) total += o.optString("content").length();
+            }
+            while (total > budget && history.length() > 6) {
+                JSONObject o = history.optJSONObject(1);
+                int len = o == null ? 0 : o.optString("content").length();
+                JSONArray nh = new JSONArray();
+                for (int i = 0; i < history.length(); i++) if (i != 1) nh.put(history.get(i));
+                history = nh;
+                total -= len;
+            }
+            if (total > budget) {
+                main.post(() -> cb.onStatus("Konteks padat — riwayat lama diringkas"));
+            }
+        } catch (Exception ignore) { }
+    }
+
     private void finish(String reason) {
         final String r = reason;
         main.post(() -> cb.onDone(r));
@@ -247,6 +301,7 @@ public class AgentEngine {
                 case "TodoWrite": return "Memperbarui daftar todo";
                 case "TodoRead": return "Membaca daftar todo";
                 case "AskUserQuestion": return "Menanyakan sesuatu";
+                case "Agent": return "Menjalankan subagent " + opt(args, "agent_type") + ": " + opt(args, "description");
                 case "EnterPlanMode": return "Masuk mode rencana";
                 case "ExitPlanMode": return "Mengajukan rencana";
                 default: return name;
@@ -305,6 +360,21 @@ public class AgentEngine {
         try {
             String date = new SimpleDateFormat("EEEE, d MMMM yyyy", new Locale("id", "ID")).format(new Date());
             sb.append("- Tanggal hari ini: ").append(date).append("\n");
+        } catch (Exception ignore) { }
+
+        // Memori proyek ala ZCode Desktop: berkas AGENTS.md di root workspace.
+        try {
+            File ag = new File(workspace, "AGENTS.md");
+            if (ag.exists()) {
+                String mem = new String(java.nio.file.Files.readAllBytes(ag.toPath()),
+                        java.nio.charset.StandardCharsets.UTF_8).trim();
+                if (!mem.isEmpty()) {
+                    if (mem.length() > 8000) mem = mem.substring(0, 8000) + "… (dipotong)";
+                    sb.append("\n# Memori proyek (AGENTS.md)\n")
+                      .append("Preferensi & konteks proyek yang ditetapkan pengguna:\n")
+                      .append(mem).append("\n");
+                }
+            }
         } catch (Exception ignore) { }
 
         return sb.toString();

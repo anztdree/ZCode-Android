@@ -77,7 +77,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
 
     private View scrim;
     private LinearLayout drawerPanel;
-    private TextView txtWsName, txtModel, txtStatus, txtTokens, txtMode, txtTheme, txtGreeting, txtSelModel, txtTest, txtFilesPath;
+    private TextView txtWsName, txtModel, txtStatus, txtTokens, txtMode, txtTheme, txtGreeting, txtSelModel, txtTest, txtFilesPath, btnProvider, lblBaseUrl;
     private View statusStrip, emptyState;
     private ImageButton btnSend;
     private ImageView imgMode, imgTheme;
@@ -90,6 +90,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
     private ScrollView scrollTerm;
     private ShellSession termShell;
     private boolean termBusy = false;
+    private boolean settingsBinding = false;
     private int activePage = 0;
 
     /* =============================== LIFECYCLE =============================== */
@@ -140,6 +141,8 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
                 addNote("Mode agent: " + modeLabel(newMode));
             });
         };
+        // Subagent (tool Agent) — ala ZCode Desktop: Explore / general-purpose
+        tools.subagent = (type, prompt) -> runSubagent(type, prompt);
 
         bindViews();
         bindListeners();
@@ -303,6 +306,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         etInput = findViewById(R.id.etInput);
         etApiKey = findViewById(R.id.etApiKey);
         etBaseUrl = findViewById(R.id.etBaseUrl);
+        lblBaseUrl = findViewById(R.id.lblBaseUrl);
         etSessionSearch = findViewById(R.id.etSessionSearch);
         etNewTodo = findViewById(R.id.etNewTodo);
         chatList = findViewById(R.id.chatList);
@@ -314,6 +318,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         pageSettings = findViewById(R.id.pageSettings);
         pageTerminal = findViewById(R.id.pageTerminal);
         pageChat = findViewById(R.id.pageChat);
+        btnProvider = findViewById(R.id.btnProvider);
         tvTermOut = findViewById(R.id.tvTermOut);
         etTermInput = findViewById(R.id.etTermInput);
         scrollTerm = findViewById(R.id.scrollTerm);
@@ -346,6 +351,17 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
             public void onTextChanged(CharSequence s, int a, int b, int c) { }
             public void afterTextChanged(Editable s) { refreshSessions(); }
         });
+
+        // Validasi koneksi BYOK otomatis (debounce 800ms ala Kai 9000)
+        TextWatcher autoValidate = new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            public void afterTextChanged(Editable s) { scheduleValidation(); }
+        };
+        etApiKey.addTextChangedListener(autoValidate);
+        etBaseUrl.addTextChangedListener(autoValidate);
+
+        findViewById(R.id.btnProvider).setOnClickListener(v -> showProviderPicker());
 
         btnSend.setOnClickListener(v -> {
             if (busy) {
@@ -1020,6 +1036,54 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         }
     }
 
+    /* ================================ SUBAGENT ================================ */
+
+    /**
+     * Jalankan subagent (tool Agent) — engine kedua dengan konteks sendiri.
+     * Explore dipaksa read-only (mode plan pada loop gate); general-purpose
+     * mengikuti mode & izin utama. Maks 6 menit; hasil dipotong 15rb karakter.
+     */
+    private String runSubagent(String type, String prompt) {
+        try {
+            final boolean explore = !"general-purpose".equals(type);
+            Tools subTools = new Tools(this, workspace);
+            subTools.mode = explore ? Prefs.MODE_PLAN : tools.mode;
+            subTools.bridge = tools.bridge;
+            final StringBuilder out = new StringBuilder();
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            final String fullPrompt = (explore
+                    ? "Kamu adalah subagent Explore — STRIKT read-only: hanya gunakan Read, Glob, Grep, WebFetch, WebSearch, dan TodoRead. JANGAN menulis/mengedit/menghapus berkas atau menjalankan Bash. Kerjakan tugas berikut secara mandiri, lalu akhiri dengan LAPORAN ringkas dan padat.\n\n"
+                    : "Kamu adalah subagent general-purpose. Kerjakan tugas berikut secara mandiri, lalu akhiri dengan LAPORAN ringkas dan padat.\n\n")
+                    + prompt;
+            AgentEngine sub = new AgentEngine(
+                    new LlmClient(Prefs.activeBaseUrl(this), Prefs.activeApiKey(this), Prefs.activeModel(this)),
+                    subTools,
+                    new AgentEngine.Callbacks() {
+                        @Override public void onDelta(String piece) { out.append(piece); }
+                        @Override public void onToolStart(String c, String n, String d) { }
+                        @Override public void onToolEnd(String c, int s, String o) { }
+                        @Override public void onUsage(int p, int ct) { }
+                        @Override public void onStatus(String s) { }
+                        @Override public void onError(String m) { out.append("\n[galat subagent] ").append(m); }
+                        @Override public void onDone(String r) { latch.countDown(); }
+                    });
+            sub.send(fullPrompt);
+            boolean finished = false;
+            try {
+                finished = latch.await(6, java.util.concurrent.TimeUnit.MINUTES);
+            } catch (InterruptedException ie) { }
+            if (!finished) {
+                sub.cancel();
+                if (out.length() == 0) return "(subagent dihentikan — batas waktu 6 menit)";
+            }
+            String res = out.toString().trim();
+            if (res.isEmpty()) return "(subagent tidak menghasilkan laporan)";
+            return res;
+        } catch (Throwable t) {
+            return "Error: subagent gagal: " + t;
+        }
+    }
+
     private void toast(String s) {
         android.widget.Toast.makeText(this, s, android.widget.Toast.LENGTH_SHORT).show();
     }
@@ -1113,83 +1177,279 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
     }
 
     private void showModelPicker() {
-        if ("custom".equals(Prefs.get(this, "provider_type", "zai"))) {
-            txtTest.setText("Memuat model dari penyedia kustom…");
-            LlmClient.fetchModels(Prefs.activeBaseUrl(this), Prefs.activeApiKey(this),
-                    new LlmClient.ModelsCallback() {
-                        @Override public void onModels(List<String> ids) {
-                            runOnUiThread(() -> pickFromList("Pilih model", ids.toArray(new String[0]), null));
-                        }
-                        @Override public void onError(String message) {
-                            runOnUiThread(() -> toast("Gagal memuat model: " + message));
-                        }
-                    });
-        } else {
+        String pt = Prefs.providerType(this);
+        if ("zai".equals(pt)) {
             String[] free = Prefs.zaiFreeModels();
             String[] paid = Prefs.zaiPaidModels();
             List<String> all = new ArrayList<>();
-            for (String s : free) all.add(s);
+            java.util.Set<String> freeSet = new java.util.HashSet<>();
+            for (String s : free) { all.add(s); freeSet.add(s); }
             for (String s : paid) all.add(s);
-            pickFromList("Pilih model", all.toArray(new String[0]), free);
+            pickModelDialog("Pilih model · Z.ai", all, freeSet);
+            return;
         }
+        // BYOK: fetch /models penyedia (ala Kai 9000)
+        txtTest.setText("Memuat model dari " + Providers.byId(pt).name + "…");
+        txtTest.setTextColor(col(R.attr.cFgSubtlest));
+        LlmClient.fetchModels(Prefs.activeBaseUrl(this), Prefs.activeApiKey(this),
+                new LlmClient.ModelsCallback() {
+                    @Override public void onModels(List<String> ids) {
+                        runOnUiThread(() -> {
+                            if (ids.isEmpty()) {
+                                toast("Daftar model kosong — ketik nama model manual");
+                                manualModelDialog();
+                            } else {
+                                pickModelDialog("Pilih model · " + Providers.byId(Prefs.providerType(MainActivity.this)).name,
+                                        ids, null);
+                            }
+                        });
+                    }
+                    @Override public void onError(String message) {
+                        runOnUiThread(() -> {
+                            txtTest.setText("✗ " + message);
+                            txtTest.setTextColor(col(R.attr.cDestructive));
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setTitle("Gagal memuat model")
+                                    .setMessage(message + "\n\nAnda tetap bisa mengetik nama model secara manual.")
+                                    .setPositiveButton("Ketik manual", (d, w) -> manualModelDialog())
+                                    .setNegativeButton("Tutup", null)
+                                    .show();
+                        });
+                    }
+                });
     }
 
-    private void pickFromList(String title, String[] ids, String[] freeIds) {
-        List<String> freeList = new ArrayList<>();
-        if (freeIds != null) for (String f : freeIds) freeList.add(f);
+    /** Dialog pilih model dgn pencarian + input manual (ala model card Kai 9000). */
+    private void pickModelDialog(String title, final List<String> all, final java.util.Set<String> freeSet) {
+        int px = (int) (14 * getResources().getDisplayMetrics().density);
+        LinearLayout outer = new LinearLayout(this);
+        outer.setOrientation(LinearLayout.VERTICAL);
+        outer.setPadding(px, px, px, 0);
+
+        final EditText etSearch = new EditText(this);
+        etSearch.setHint("Cari model…");
+        etSearch.setTextSize(13);
+        etSearch.setBackgroundResource(R.drawable.bg_search);
+        etSearch.setPadding(px / 2, px / 3, px / 2, px / 3);
+        etSearch.setTextColor(col(R.attr.cFg));
+        etSearch.setHintTextColor(col(R.attr.cFgSubtlest));
+        etSearch.setMaxLines(1);
+        outer.addView(etSearch);
+
+        final LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        ScrollView sc = new ScrollView(this);
+        sc.addView(list);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(380));
+        outer.addView(sc, lp);
+
+        final AlertDialog[] holder = new AlertDialog[1];
+        final Runnable[] rebuild = new Runnable[1];
+        rebuild[0] = () -> {
+            list.removeAllViews();
+            String q = etSearch.getText().toString().trim().toLowerCase();
+            String cur = Prefs.activeModel(this);
+            int shown = 0;
+            for (final String id : all) {
+                if (!q.isEmpty() && !id.toLowerCase().contains(q)) continue;
+                if (shown >= 120) {
+                    list.addView(sectionLabel("… ketik kata kunci untuk melihat lainnya"));
+                    break;
+                }
+                boolean free = freeSet != null && freeSet.contains(id);
+                if (free && shown == 0) list.addView(sectionLabel("GRATIS"));
+                LinearLayout row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(px, px, px, px);
+                row.setBackgroundResource(R.drawable.bg_selectable);
+                TextView t = new TextView(this);
+                t.setText(Prefs.prettyModel(id) + (id.equals(cur) ? "  ✓" : ""));
+                t.setTextSize(14);
+                t.setTextColor(col(R.attr.cFg));
+                t.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+                row.addView(t);
+                if (free) {
+                    TextView badge = new TextView(this);
+                    badge.setText("GRATIS");
+                    badge.setTextSize(10);
+                    badge.setTextColor(0xFF1E8A3E);
+                    badge.setBackgroundResource(R.drawable.bg_badge_free);
+                    int p2 = (int) (6 * getResources().getDisplayMetrics().density);
+                    badge.setPadding(p2, 2, p2, 2);
+                    row.addView(badge);
+                }
+                row.setOnClickListener(v -> {
+                    Prefs.set(this, "model_" + Prefs.providerType(this), id);
+                    updateModelChip();
+                    txtSelModel.setText(Prefs.prettyModel(id));
+                    if (holder[0] != null) holder[0].dismiss();
+                    toast("Model: " + Prefs.prettyModel(id));
+                });
+                list.addView(row);
+                shown++;
+            }
+            if (shown == 0) list.addView(sectionLabel("Tidak ada model yang cocok"));
+        };
+        etSearch.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            public void afterTextChanged(Editable s) { rebuild[0].run(); }
+        });
+        rebuild[0].run();
+
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle(title);
+        b.setView(outer);
+        b.setNeutralButton("Ketik manual", (d, w) -> manualModelDialog());
+        holder[0] = buildShownDialog(b, outer);
+    }
+
+    /** Input model manual (custom model free-text ala Kai 9000). */
+    private void manualModelDialog() {
+        int px = (int) (16 * getResources().getDisplayMetrics().density);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        String cur = Prefs.activeModel(this);
-        boolean headerDone = false;
-        for (final String id : ids) {
-            boolean free = freeList.contains(id);
-            if (freeIds != null && free && !headerDone) {
-                box.addView(sectionLabel("GRATIS"));
-                headerDone = true;
-            }
-            if (freeIds != null && headerDone && !free) {
-                box.addView(sectionLabel("BERBAYAR"));
-                headerDone = false;
-                // tandai agar label tak diulang
-            }
+        box.setPadding(px, px / 2, px, 0);
+        final EditText ed = new EditText(this);
+        ed.setHint("mis: llama-3.3-70b-instruct");
+        ed.setTextSize(13);
+        ed.setBackgroundResource(R.drawable.bg_search);
+        ed.setPadding(px / 2, px / 3, px / 2, px / 3);
+        ed.setTextColor(col(R.attr.cFg));
+        box.addView(ed);
+        new AlertDialog.Builder(this)
+                .setTitle("Model manual")
+                .setMessage("Ketik ID model persis seperti di penyedia.")
+                .setView(box)
+                .setPositiveButton("Simpan", (d, w) -> {
+                    String id = ed.getText().toString().trim();
+                    if (!id.isEmpty()) {
+                        Prefs.set(this, "model_" + Prefs.providerType(this), id);
+                        updateModelChip();
+                        txtSelModel.setText(Prefs.prettyModel(id));
+                        toast("Model: " + id);
+                    }
+                })
+                .setNegativeButton("Batal", null)
+                .show();
+    }
+
+    /** Pemilih penyedia BYOK — 13 preset (baseUrl + tautan API key + catatan). */
+    private void showProviderPicker() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        String cur = Prefs.providerType(this);
+        for (final Providers.P p : Providers.all()) {
             LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setOrientation(LinearLayout.VERTICAL);
             int px = (int) (14 * getResources().getDisplayMetrics().density);
             row.setPadding(px, px, px, px);
             row.setBackgroundResource(R.drawable.bg_selectable);
             TextView t = new TextView(this);
-            t.setText(Prefs.prettyModel(id) + (id.equals(cur) ? "  ✓" : ""));
-            t.setTextSize(14);
+            t.setText((p.id.equals(cur) ? "●  " : "○  ") + p.name);
+            t.setTextSize(15);
+            t.setTypeface(null, Typeface.BOLD);
             t.setTextColor(col(R.attr.cFg));
-            t.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            TextView d = new TextView(this);
+            d.setText((p.baseUrl.isEmpty() ? "(Base URL kustom)" : p.baseUrl) + "\n" + p.note);
+            d.setTextSize(11);
+            d.setTextColor(col(R.attr.cFgSubtle));
             row.addView(t);
-            if (free) {
-                TextView badge = new TextView(this);
-                badge.setText("GRATIS");
-                badge.setTextSize(10);
-                badge.setTextColor(0xFF1E8A3E);
-                badge.setBackgroundResource(R.drawable.bg_badge_free);
-                int p2 = (int) (6 * getResources().getDisplayMetrics().density);
-                badge.setPadding(p2, 2, p2, 2);
-                row.addView(badge);
-            }
+            row.addView(d);
             row.setOnClickListener(v -> {
-                Prefs.set(this, "model_" + Prefs.get(this, "provider_type", "zai"), id);
+                Prefs.set(this, "provider_type", p.id);
+                refreshSettingsPanel();
                 updateModelChip();
-                txtSelModel.setText(Prefs.prettyModel(id));
                 if (dialogHolder[0] != null) dialogHolder[0].dismiss();
-                toast("Model: " + Prefs.prettyModel(id));
+                toast("Penyedia: " + p.name);
+                if (!p.apiKeyUrl.isEmpty()) showKeyHint(p);
             });
             box.addView(row);
         }
         ScrollView sc = new ScrollView(this);
         sc.addView(box);
         AlertDialog.Builder b = new AlertDialog.Builder(this);
-        b.setTitle(title);
+        b.setTitle("Pilih penyedia (BYOK)");
         b.setView(sc);
         dialogHolder[0] = buildShownDialog(b, sc);
     }
+
+    /** Tawarkan membuka halaman pembuatan API key (deep-link ala Kai 9000). */
+    private void showKeyHint(final Providers.P p) {
+        new AlertDialog.Builder(this)
+                .setTitle(p.name)
+                .setMessage(p.note + "\n\nBuat API key di:\n" + p.apiKeyUrl)
+                .setPositiveButton("Buka browser", (d, w) -> {
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(p.apiKeyUrl)));
+                    } catch (Exception e) {
+                        copyText("Tautan API key " + p.name, p.apiKeyUrl);
+                        toast("Tidak bisa membuka browser — tautan disalin");
+                    }
+                })
+                .setNeutralButton("Salin tautan", (d, w) -> {
+                    copyText("Tautan API key " + p.name, p.apiKeyUrl);
+                    toast("Tautan disalin");
+                })
+                .setNegativeButton("Nanti", null)
+                .show();
+    }
+
+    /** Segarkan panel setelan sesuai penyedia aktif (label, key, base URL, model). */
+    private void refreshSettingsPanel() {
+        Providers.P p = Providers.byId(Prefs.providerType(this));
+        btnProvider.setText("Penyedia: " + p.name);
+        boolean noKey = "ollama".equals(p.id) || "lmstudio".equals(p.id);
+        etApiKey.setEnabled(!noKey);
+        etApiKey.setHint(noKey ? "tanpa API key (provider lokal)" : "tempel API key " + p.name);
+        etApiKey.setText(noKey ? "" : Prefs.apiKeyOf(this, p.id));
+        lblBaseUrl.setVisibility(p.editableUrl ? View.VISIBLE : View.GONE);
+        etBaseUrl.setVisibility(p.editableUrl ? View.VISIBLE : View.GONE);
+        if (p.editableUrl) etBaseUrl.setText(Prefs.baseUrlOf(this, p.id));
+        txtSelModel.setText(Prefs.prettyModel(Prefs.activeModel(this)));
+        txtTest.setText("");
+        txtTest.setTextColor(col(R.attr.cFgSubtle));
+    }
+
+    /** Validasi koneksi otomatis (debounce 800ms) — status granular. */
+    private void scheduleValidation() {
+        if (settingsBinding || activePage != 4) return;
+        ui.removeCallbacks(validateRun);
+        ui.postDelayed(validateRun, 800);
+    }
+
+    private final Runnable validateRun = new Runnable() {
+        @Override public void run() {
+            persistSettings();
+            txtTest.setText("Memeriksa koneksi…");
+            txtTest.setTextColor(col(R.attr.cFgSubtlest));
+            LlmClient.fetchModels(Prefs.activeBaseUrl(MainActivity.this), Prefs.activeApiKey(MainActivity.this),
+                    new LlmClient.ModelsCallback() {
+                        @Override public void onModels(final List<String> ids) {
+                            runOnUiThread(() -> {
+                                if (ids.isEmpty()) {
+                                    txtTest.setText("✓ Terhubung — daftar model kosong (ketik nama model manual)");
+                                    txtTest.setTextColor(col(R.attr.cWarning));
+                                } else {
+                                    txtTest.setText("✓ Terhubung — " + ids.size() + " model tersedia");
+                                    txtTest.setTextColor(col(R.attr.cSuccess));
+                                }
+                            });
+                        }
+
+                        @Override public void onError(final String message) {
+                            runOnUiThread(() -> {
+                                txtTest.setText("✗ " + message);
+                                txtTest.setTextColor(col(R.attr.cDestructive));
+                            });
+                        }
+                    });
+        }
+    };
+
+    // pickFromList lama digantikan pickModelDialog (pencarian + input manual)
 
     private final AlertDialog[] dialogHolder = new AlertDialog[1];
 
@@ -1230,6 +1490,31 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
             }
         };
         sessionList.setAdapter(sessionAdapter);
+        // Tekan-lama: ganti nama tugas (fitur sesi ala desktop)
+        sessionList.setOnItemLongClickListener((p, v, pos, id) -> {
+            if (pos < 0 || pos >= sessionAdapter.items.size()) return true;
+            final SessionStore.Meta m = sessionAdapter.items.get(pos);
+            int px = (int) (16 * getResources().getDisplayMetrics().density);
+            LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(px, px / 2, px, 0);
+            final EditText ed = new EditText(this);
+            ed.setText(m.title);
+            ed.setTextSize(14);
+            ed.setTextColor(col(R.attr.cFg));
+            ed.setBackgroundResource(R.drawable.bg_search);
+            ed.setPadding(px / 2, px / 3, px / 2, px / 3);
+            box.addView(ed);
+            new AlertDialog.Builder(this)
+                    .setTitle("Ganti nama tugas")
+                    .setView(box)
+                    .setPositiveButton("Simpan", (d, w) -> {
+                        SessionStore.rename(MainActivity.this, m.id, ed.getText().toString());
+                        refreshSessions();
+                    })
+                    .setNegativeButton("Batal", null).show();
+            return true;
+        });
     }
 
     private void loadCurrentOrNew() {
@@ -1584,12 +1869,7 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         ((RadioButton) findViewById(R.id.rbDark)).setChecked("dark".equals(t));
         ((RadioButton) findViewById(R.id.rbSystem)).setChecked("system".equals(t));
 
-        String pt = Prefs.get(this, "provider_type", "zai");
-        ((RadioButton) findViewById(R.id.rbZai)).setChecked("zai".equals(pt));
-        ((RadioButton) findViewById(R.id.rbCustom)).setChecked("custom".equals(pt));
-        boolean custom = "custom".equals(pt);
-        findViewById(R.id.lblBaseUrl).setVisibility(custom ? View.VISIBLE : View.GONE);
-        etBaseUrl.setVisibility(custom ? View.VISIBLE : View.GONE);
+        settingsBinding = true;
 
         ((RadioGroup) findViewById(R.id.rgTheme)).setOnCheckedChangeListener((g, id) -> {
             String nt = id == R.id.rbDark ? "dark" : (id == R.id.rbSystem ? "system" : "light");
@@ -1605,24 +1885,16 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
             Prefs.set(this, "theme_mode", nt);
             recreate();
         });
-        ((RadioGroup) findViewById(R.id.rgProvider)).setOnCheckedChangeListener((g, id) -> {
-            String np = id == R.id.rbCustom ? "custom" : "zai";
-            Prefs.set(this, "provider_type", np);
-            boolean cu = "custom".equals(np);
-            findViewById(R.id.lblBaseUrl).setVisibility(cu ? View.VISIBLE : View.GONE);
-            etBaseUrl.setVisibility(cu ? View.VISIBLE : View.GONE);
-            updateModelChip();
-        });
 
-        etApiKey.setText(Prefs.activeApiKey(this));
-        etBaseUrl.setText(Prefs.get(this, "custom_base_url", ""));
-        txtSelModel.setText(Prefs.prettyModel(Prefs.activeModel(this)));
+        refreshSettingsPanel();
+        settingsBinding = false;
     }
 
     private void persistSettings() {
-        Prefs.set(this, "zai_api_key", etApiKey.getText().toString().trim());
-        Prefs.set(this, "custom_api_key", etApiKey.getText().toString().trim());
-        Prefs.set(this, "custom_base_url", etBaseUrl.getText().toString().trim());
+        String id = Prefs.providerType(this);
+        Prefs.setApiKey(this, id, etApiKey.getText().toString().trim());
+        if (Providers.byId(id).editableUrl)
+            Prefs.setBaseUrl(this, id, etBaseUrl.getText().toString().trim());
     }
 
     private void testConnection() {

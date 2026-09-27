@@ -43,11 +43,15 @@ public class Tools {
 
     public interface ModeHook { void onModeChanged(String newMode); }
 
+    /** Peluncur subagent (tool Agent) — diimplementasi MainActivity. */
+    public interface SubagentRunner { String run(String agentType, String prompt); }
+
     private final File workspace;
     private final android.content.Context appCtx;
     private final Set<String> readPaths = new HashSet<>();
     public UiBridge bridge;
     public ModeHook modeHook;
+    public SubagentRunner subagent;
     public String mode = Prefs.MODE_BUILD;
 
     public Tools(Context ctx, File workspace) {
@@ -108,6 +112,10 @@ public class Tools {
                             arrOf("options", "2-4 pilihan jawaban",
                                     str("label", "Label singkat pilihan"),
                                     str("description", "Penjelasan pilihan")))));
+            arr.put(tool("Agent", "Launch a new subagent that works autonomously with its own context and returns a report. agent_type: \"Explore\" (fast, strictly read-only — search/read/web) or \"general-purpose\" (full tools; file writes still follow the current permission mode). Give the subagent a complete, self-contained prompt: goal, relevant context, and the exact report you want back. Use it for broad exploration or heavy research without polluting the main conversation.",
+                    str("agent_type", "Explore | general-purpose"),
+                    str("description", "Ringkasan tugas 3-5 kata untuk tampilan"),
+                    str("prompt", "Tugas lengkap yang mandiri untuk subagent")));
             arr.put(tool("EnterPlanMode", "Use this tool proactively when you're about to start a non-trivial implementation task: it lets you explore and design before writing any code."));
             arr.put(tool("ExitPlanMode", "Use this tool when you are in plan mode and have finished writing your plan, ready for user approval. The plan parameter is REQUIRED.",
                     str("plan", "Rencana implementasi lengkap (markdown)")));
@@ -183,6 +191,7 @@ public class Tools {
                 case "TodoWrite": return tTodoWrite(args);
                 case "TodoRead": return TodoStore.load(appCtx).toString(2);
                 case "AskUserQuestion": return tAskUser(args);
+                case "Agent": return tAgent(args);
                 case "EnterPlanMode": return tEnterPlan();
                 case "ExitPlanMode": return tExitPlan(args);
                 default: return "Error: tool tidak dikenal: " + name;
@@ -197,7 +206,7 @@ public class Tools {
         return "Read".equals(name) || "Glob".equals(name) || "Grep".equals(name)
                 || "WebFetch".equals(name) || "WebSearch".equals(name) || "TodoRead".equals(name)
                 || "TodoWrite".equals(name) || "AskUserQuestion".equals(name)
-                || "EnterPlanMode".equals(name);
+                || "EnterPlanMode".equals(name) || "Agent".equals(name);
     }
 
     private File resolve(String p) {
@@ -526,6 +535,21 @@ public class Tools {
         String answer = bridge.askUser(qs);
         if (answer == null) return "User tidak menjawab pertanyaan. Lanjutkan dengan asumsi terbaik Anda dan sebutkan asumsinya.";
         return "Jawaban user:\n" + answer;
+    }
+
+    /* --------------------------------- Agent -------------------------------- */
+
+    /** Subagent ala ZCode Desktop: Explore (read-only) / general-purpose. */
+    private String tAgent(JSONObject a) throws Exception {
+        String type = a.optString("agent_type", "Explore");
+        if (!"general-purpose".equals(type)) type = "Explore";
+        String prompt = a.optString("prompt", "").trim();
+        if (prompt.isEmpty()) return "Error: prompt wajib (tugas mandiri untuk subagent)";
+        if (Prefs.MODE_PLAN.equals(mode) && !"Explore".equals(type))
+            return "Denied: Plan mode hanya mengizinkan subagent Explore (read-only).";
+        if (subagent == null) return "Error: subagent tidak tersedia";
+        String res = subagent.run(type, prompt);
+        return res.length() > 15000 ? res.substring(0, 15000) + "… (dipotong)" : res;
     }
 
     /* ----------------------------- Plan mode -------------------------------- */

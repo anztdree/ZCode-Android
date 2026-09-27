@@ -3,7 +3,7 @@ package com.zcodemobile.app;
 import android.content.Context;
 import android.content.SharedPreferences;
 
-/** Penyimpanan preferensi (setelan) aplikasi. */
+/** Penyimpanan preferensi (setelan) aplikasi — BYOK per-penyedia ala Kai 9000. */
 public class Prefs {
     private static final String FILE = "zcode_prefs";
 
@@ -35,30 +35,65 @@ public class Prefs {
                 ? m : MODE_BUILD;
     }
 
-    /* ============================ Provider ============================ */
+    /* ==================== Penyedia model (BYOK hardcore) ==================== */
 
+    /** ID penyedia aktif (zai/openrouter/groq/…/custom). Nilai tak dikenal → zai. */
+    public static String providerType(Context c) {
+        String t = get(c, "provider_type", "zai");
+        return Providers.exists(t) ? t : "zai";
+    }
+
+    /** API key per penyedia: key_<id>; kompatibel dengan kunci lama zai_api_key/custom_api_key. */
+    public static String apiKeyOf(Context c, String providerId) {
+        String k = get(c, "key_" + providerId, "");
+        if (!k.isEmpty()) return k;
+        // migrasi versi ≤2.2.x
+        if ("zai".equals(providerId)) return get(c, "zai_api_key", "");
+        if ("custom".equals(providerId)) return get(c, "custom_api_key", "");
+        return "";
+    }
+
+    /** Base URL per penyedia: url_<id> utk preset editable; kompatibel custom_base_url lama. */
+    public static String baseUrlOf(Context c, String providerId) {
+        Providers.P p = Providers.byId(providerId);
+        String u = get(c, "url_" + providerId, "");
+        if (!u.isEmpty()) return stripSlash(u);
+        if (p.editableUrl && "custom".equals(providerId)) return stripSlash(get(c, "custom_base_url", ""));
+        return stripSlash(p.baseUrl);
+    }
+
+    private static String stripSlash(String u) {
+        if (u == null) return "";
+        u = u.trim();
+        while (u.endsWith("/")) u = u.substring(0, u.length() - 1);
+        return u;
+    }
+
+    public static void setApiKey(Context c, String providerId, String key) {
+        set(c, "key_" + providerId, key == null ? "" : key.trim());
+    }
+
+    public static void setBaseUrl(Context c, String providerId, String url) {
+        set(c, "url_" + providerId, url == null ? "" : url.trim());
+    }
+
+    /** Base URL penyedia AKTIF — dipakai LlmClient. */
     public static String activeBaseUrl(Context c) {
-        String type = get(c, "provider_type", "zai");
-        if ("custom".equals(type)) {
-            String u = get(c, "custom_base_url", "").trim();
-            if (u.endsWith("/")) u = u.substring(0, u.length() - 1);
-            return u;
-        }
-        return "https://api.z.ai/api/paas/v4";
+        return baseUrlOf(c, providerType(c));
     }
 
+    /** API key penyedia AKTIF. */
     public static String activeApiKey(Context c) {
-        String type = get(c, "provider_type", "zai");
-        return "custom".equals(type) ? get(c, "custom_api_key", "") : get(c, "zai_api_key", "");
+        return apiKeyOf(c, providerType(c));
     }
 
+    /** Model aktif per penyedia: model_<id> (format ini sama sejak awal — aman). */
     public static String activeModel(Context c) {
-        return get(c, "model_" + get(c, "provider_type", "zai"), defaultModel(c));
+        return get(c, "model_" + providerType(c), defaultModel(c));
     }
 
     public static String defaultModel(Context c) {
-        String type = get(c, "provider_type", "zai");
-        return "custom".equals(type) ? "" : "glm-4.5-flash";
+        return "zai".equals(providerType(c)) ? "glm-4.5-flash" : "";
     }
 
     /** Model Z.ai hardcoded — gratis dulu (sesi user: model gratis diprioritaskan). */
@@ -78,7 +113,8 @@ public class Prefs {
         for (String p : parts) {
             if (sb.length() > 0) sb.append('-');
             if (p.matches("\\d+(\\.\\d+)?")) sb.append(p);
-            else sb.append(p.substring(0, 1).toUpperCase()).append(p.substring(1));
+            else if (p.length() > 1) sb.append(Character.toUpperCase(p.charAt(0))).append(p.substring(1));
+            else sb.append(p);
         }
         return sb.toString();
     }

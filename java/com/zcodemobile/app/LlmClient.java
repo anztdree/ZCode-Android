@@ -38,6 +38,34 @@ public class LlmClient {
         this.model = model;
     }
 
+    /** Nama model klien ini (dipakai system prompt). */
+    public String model() { return model; }
+
+    /** Pesan error ramah + granular ala Kai 9000 (status per kode HTTP). */
+    static String friendlyError(int code, String body) {
+        String detail = body == null ? "" : body.trim();
+        if (detail.length() > 160) detail = detail.substring(0, 160) + "…";
+        String base;
+        switch (code) {
+            case 401: base = "API Key tidak valid / belum terpasang"; break;
+            case 403: base = "Akses ditolak — key belum berhak atau region diblokir"; break;
+            case 402: base = "Kuota/kredit penyedia habis"; break;
+            case 404: base = "Endpoint tidak ditemukan — periksa Base URL (biasanya harus berakhiran /v1)"; break;
+            case 429: base = "Rate limit / kuota gratis terlampaui — tunggu sebentar"; break;
+            default: base = code >= 500 ? "Server penyedia sedang bermasalah" : "Permintaan gagal"; break;
+        }
+        return base + " (HTTP " + code + ")" + (detail.isEmpty() ? "" : ": " + detail);
+    }
+
+    /** Pesan ramah utk eksepsi jaringan. */
+    static String friendlyNetworkError(Throwable e) {
+        String n = e.getClass().getSimpleName();
+        if (n.contains("UnknownHost")) return "Host tidak terjangkau — periksa Base URL & koneksi internet";
+        if (n.contains("Timeout") || n.contains("SocketTimeout")) return "Waktu tunggu habis — koneksi lambat / host salah";
+        if (n.contains("Connect")) return "Tidak bisa terhubung — periksa Base URL, port & internet";
+        return n + ": " + e.getMessage();
+    }
+
     public void cancel() { cancelled = true; }
 
     /** Chat streaming. messages: JSONArray dari {role, content} + tool messages. */
@@ -69,7 +97,7 @@ public class LlmClient {
 
                 int code = conn.getResponseCode();
                 InputStream is = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
-                if (is == null) { cb.onError("HTTP " + code + " (tanpa isi)"); return; }
+                if (is == null) { cb.onError(friendlyError(code, "")); return; }
 
                 BufferedReader reader = new BufferedReader(
                         new InputStreamReader(is, StandardCharsets.UTF_8));
@@ -77,7 +105,7 @@ public class LlmClient {
                     StringBuilder sb = new StringBuilder();
                     String ln;
                     while ((ln = reader.readLine()) != null) sb.append(ln).append('\n');
-                    cb.onError("HTTP " + code + ": " + sb.substring(0, Math.min(500, sb.length())));
+                    cb.onError(friendlyError(code, sb.toString()));
                     return;
                 }
 
@@ -150,7 +178,7 @@ public class LlmClient {
                 }
                 cb.onDone(stop);
             } catch (Exception e) {
-                if (!cancelled) cb.onError(e.getClass().getSimpleName() + ": " + e.getMessage());
+                if (!cancelled) cb.onError(friendlyNetworkError(e));
                 else cb.onDone("cancelled");
             } finally {
                 if (conn != null) conn.disconnect();
@@ -178,7 +206,7 @@ public class LlmClient {
                 StringBuilder sb = new StringBuilder();
                 String ln;
                 while ((ln = r.readLine()) != null) sb.append(ln);
-                if (code >= 400) { cb.onError("HTTP " + code + ": " + sb.substring(0, Math.min(300, sb.length()))); return; }
+                if (code >= 400) { cb.onError(friendlyError(code, sb.toString())); return; }
                 JSONObject root = new JSONObject(sb.toString());
                 JSONArray data = root.optJSONArray("data");
                 List<String> ids = new ArrayList<>();
@@ -191,7 +219,7 @@ public class LlmClient {
                 java.util.Collections.sort(ids);
                 cb.onModels(ids);
             } catch (Exception e) {
-                cb.onError(e.getClass().getSimpleName() + ": " + e.getMessage());
+                cb.onError(friendlyNetworkError(e));
             } finally {
                 if (conn != null) conn.disconnect();
             }
@@ -230,7 +258,7 @@ public class LlmClient {
                 String ln;
                 while ((ln = r.readLine()) != null) sb.append(ln);
                 if (code >= 400) {
-                    cb.onResult(false, "HTTP " + code + ": " + sb.substring(0, Math.min(300, sb.length())));
+                    cb.onResult(false, friendlyError(code, sb.toString()));
                 } else {
                     JSONObject root = new JSONObject(sb.toString());
                     String content = root.getJSONArray("choices").getJSONObject(0)
@@ -238,7 +266,7 @@ public class LlmClient {
                     cb.onResult(true, "Terhubung! Balasan model: " + content);
                 }
             } catch (Exception e) {
-                cb.onResult(false, e.getClass().getSimpleName() + ": " + e.getMessage());
+                cb.onResult(false, friendlyNetworkError(e));
             } finally {
                 if (conn != null) conn.disconnect();
             }
