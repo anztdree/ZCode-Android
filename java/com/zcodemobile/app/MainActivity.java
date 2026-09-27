@@ -98,14 +98,28 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
     protected void onCreate(Bundle savedInstanceState) {
         applyTheme();
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
+        // Logger crash dipasang SEDINI MUNGKIN agar crash mana pun (termasuk
+        // kegagalan inflate layout) tercatat ke files/crash-log.txt.
+        installCrashLogger();
+        try {
+            setContentView(R.layout.activity_main);
+        } catch (Throwable t) {
+            showFatal("Gagal memuat tampilan", t);
+            return;
+        }
+        try {
+            initApp();
+        } catch (Throwable t) {
+            // JANGAN pernah mati paksa tanpa UI: tampilkan layar pemulihan.
+            showFatal("Gagal menyiapkan aplikasi", t);
+            return;
+        }
+        maybeOfferCrashReport();
+    }
 
+    private void initApp() {
         workspace = new File(getFilesDir(), "workspace");
         if (!workspace.exists()) workspace.mkdirs();
-
-        // Logger crash: semua eksepsi tak tertangkap dicatat ke berkas agar bisa
-        // dibagikan untuk diagnosis (tidak mencegah crash, tapi menjelaskannya).
-        installCrashLogger();
 
         md = new MarkdownLite(col(R.attr.cFg), col(R.attr.cFgSubtle), col(R.attr.cFgSubtlest),
                 col(R.attr.cCodeBg), col(R.attr.cCodeFg), col(R.attr.cAsk),
@@ -130,9 +144,14 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         bindViews();
         bindListeners();
 
-        // Sesi aktif (atau baru)
+        // Sesi aktif (atau baru).
+        // PERBAIKAN FORCE CLOSE SAAT DIBUKA (v2.2.1): sebelumnya `saved` masih
+        // null bila instalasi baru / preferensi kosong (session_current belum
+        // terisi), sehingga `saved.length()` langsung NPE — aplikasi mati paksa
+        // begitu dibuka, bahkan berulang (crash loop) karena preferensi belum
+        // sempat tersimpan sebelum proses mati. Kini selalu diisi array kosong.
         sessionId = SessionStore.currentId(this);
-        JSONArray saved = null;
+        JSONArray saved = new JSONArray();
         if (!sessionId.isEmpty()) {
             saved = SessionStore.loadItems(this, sessionId);
             if (saved.length() == 0 && !new File(SessionStore.dir(this), sessionId + ".json").exists())
@@ -303,7 +322,8 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
         // berwarna langsung NPE begitu halaman Terminal dibuka. Paksa buffer
         // EDITABLE sejak awal (perilaku ini juga diset ulang setiap setText).
         tvTermOut.setText("", TextView.BufferType.EDITABLE);
-        txtWsName.setText(workspace.getName() + " · " + workspace.listFiles().length + " item");
+        File[] wsList = workspace.listFiles();
+        txtWsName.setText(workspace.getName() + " · " + (wsList == null ? 0 : wsList.length) + " item");
     }
 
     private void bindListeners() {
@@ -822,27 +842,182 @@ public class MainActivity extends Activity implements ChatAdapter.PlanActionList
     private void installCrashLogger() {
         final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
-            try {
-                File f = new File(getFilesDir(), "crash-log.txt");
-                StringBuilder sb = new StringBuilder();
-                sb.append("=== ").append(new java.util.Date())
-                        .append(" thread=").append(t.getName()).append('\n');
-                sb.append(android.util.Log.getStackTraceString(e)).append("\n\n");
-                String old = "";
-                try {
-                    java.io.FileInputStream fi = new java.io.FileInputStream(f);
-                    byte[] b = new byte[40_000];
-                    int n = fi.read(b); fi.close();
-                    if (n > 0) old = new String(b, 0, n, StandardCharsets.UTF_8);
-                } catch (Exception ignore) { }
-                String all = sb.toString() + old;
-                if (all.length() > 40_000) all = all.substring(0, 40_000);
-                java.io.FileOutputStream fo = new java.io.FileOutputStream(f);
-                fo.write(all.getBytes(StandardCharsets.UTF_8));
-                fo.close();
-            } catch (Exception ignore) { }
+            appendCrashFile("uncaught", e);
             if (prev != null) prev.uncaughtException(t, e);
         });
+    }
+
+    /** Tambah satu laporan error ke files/crash-log.txt (paling baru di atas). */
+    private void appendCrashFile(String what, Throwable e) {
+        try {
+            File f = new File(getFilesDir(), "crash-log.txt");
+            StringBuilder sb = new StringBuilder();
+            sb.append("=== ").append(new java.util.Date())
+                    .append(" — ").append(what)
+                    .append(" thread=").append(Thread.currentThread().getName()).append('\n');
+            sb.append(android.util.Log.getStackTraceString(e)).append("\n\n");
+            String old = "";
+            try {
+                FileInputStream fi = new FileInputStream(f);
+                byte[] b = new byte[40_000];
+                int n = fi.read(b); fi.close();
+                if (n > 0) old = new String(b, 0, n, StandardCharsets.UTF_8);
+            } catch (Exception ignore) { }
+            String all = sb.toString() + old;
+            if (all.length() > 40_000) all = all.substring(0, 40_000);
+            FileOutputStream fo = new FileOutputStream(f);
+            fo.write(all.getBytes(StandardCharsets.UTF_8));
+            fo.close();
+        } catch (Exception ignore) { }
+    }
+
+    private static String readHead(File f, int max) {
+        try {
+            FileInputStream fi = new FileInputStream(f);
+            byte[] b = new byte[max];
+            int n = fi.read(b); fi.close();
+            return n > 0 ? new String(b, 0, n, StandardCharsets.UTF_8) : "";
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private void copyText(String label, String text) {
+        try {
+            android.content.ClipboardManager cm =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText(label, text));
+        } catch (Throwable ignore) { }
+    }
+
+    /** Bila ada laporan crash dari sesi sebelumnya, tawarkan lihat/salin. */
+    private void maybeOfferCrashReport() {
+        try {
+            final File f = new File(getFilesDir(), "crash-log.txt");
+            if (!f.exists() || f.length() == 0) return;
+            final String body = readHead(f, 40_000);
+            String snippet = body.length() > 500 ? body.substring(0, 500) + "…" : body;
+            new AlertDialog.Builder(this)
+                    .setTitle("Terjadi error sebelumnya")
+                    .setMessage("ZCode Mobile menemukan laporan error dari sesi sebelumnya:\n\n" + snippet)
+                    .setPositiveButton("Salin laporan", (d, w) -> {
+                        copyText("Laporan ZCode Mobile", body);
+                        f.delete();
+                        toast("Laporan disalin — tempel (paste) ke pengembang");
+                    })
+                    .setNeutralButton("Lihat lengkap", (d, w) -> showFullCrashLog(f))
+                    .setNegativeButton("Tutup", null)
+                    .show();
+        } catch (Throwable ignore) { }
+    }
+
+    private void showFullCrashLog(final File f) {
+        String body = readHead(f, 40_000);
+        TextView tv = new TextView(this);
+        tv.setText(body);
+        tv.setTextSize(11);
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setTextIsSelectable(true);
+        int px = (int) (16 * getResources().getDisplayMetrics().density);
+        tv.setPadding(px, px / 2, px, px / 2);
+        ScrollView sc = new ScrollView(this);
+        sc.addView(tv);
+        new AlertDialog.Builder(this)
+                .setTitle("Laporan error")
+                .setView(sc)
+                .setPositiveButton("Salin semua", (d, w) -> {
+                    copyText("Laporan ZCode Mobile", body);
+                    f.delete();
+                    toast("Laporan disalin");
+                })
+                .setNegativeButton("Tutup", null)
+                .show();
+    }
+
+    /** Layar pemulihan bila startup gagal — aplikasi tidak pernah mati tanpa UI. */
+    private void showFatal(String what, Throwable t) {
+        try {
+            appendCrashFile(what, t);
+            int px = (int) (20 * getResources().getDisplayMetrics().density);
+            LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(px, px * 2, px, px);
+            box.setLayoutParams(new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+            TextView ic = new TextView(this);
+            ic.setText("⚠ ZCode Mobile");
+            ic.setTextSize(20);
+            ic.setTypeface(null, Typeface.BOLD);
+            ic.setTextColor(colOr(R.attr.cDestructive, 0xFFD64545));
+            box.addView(ic);
+
+            TextView sub = new TextView(this);
+            sub.setText(what + "\n\nAplikasi tidak berhasil dimulai. Coba \"Mulai ulang\"; "
+                    + "bila tetap gagal, gunakan \"Perbaiki data\", lalu kirim laporan "
+                    + "error (disalin otomatis) ke pengembang.");
+            sub.setTextSize(14);
+            sub.setTextColor(colOr(R.attr.cFg, 0xFF333333));
+            sub.setPadding(0, px / 2, 0, px);
+            box.addView(sub);
+
+            TextView err = new TextView(this);
+            err.setText(android.util.Log.getStackTraceString(t));
+            err.setTextSize(11);
+            err.setTypeface(Typeface.MONOSPACE);
+            err.setTextColor(colOr(R.attr.cFgSubtle, 0xFF777777));
+            ScrollView esc = new ScrollView(this);
+            esc.addView(err);
+            box.addView(esc, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setPadding(0, px, 0, 0);
+            row.addView(fatalBtn("Mulai ulang", v -> recreate()));
+            row.addView(fatalBtn("Perbaiki data", v -> repairAndRestart()));
+            row.addView(fatalBtn("Salin laporan", v -> {
+                copyText("Laporan ZCode Mobile", android.util.Log.getStackTraceString(t));
+                toast("Laporan disalin");
+            }));
+            box.addView(row);
+            setContentView(box);
+        } catch (Throwable ignore) {
+            try { finish(); } catch (Throwable ignored) { }
+        }
+    }
+
+    private android.widget.Button fatalBtn(String label, View.OnClickListener l) {
+        android.widget.Button b = new android.widget.Button(this);
+        b.setText(label);
+        b.setOnClickListener(l);
+        b.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        return b;
+    }
+
+    /** Resolusi warna tema dengan nilai cadangan (layar pemulihan). */
+    private int colOr(int attr, int def) {
+        try {
+            TypedValue tv = new TypedValue();
+            if (getTheme().resolveAttribute(attr, tv, true)) return tv.data;
+        } catch (Throwable ignore) { }
+        return def;
+    }
+
+    /** Bersihkan data yang berpotensi korup lalu mulai ulang aplikasi. */
+    private void repairAndRestart() {
+        try {
+            getSharedPreferences("zcode_prefs", MODE_PRIVATE).edit().clear().commit();
+            File sd = new File(getFilesDir(), "sessions");
+            File[] fs = sd.listFiles();
+            if (fs != null) for (File f : fs) f.delete();
+            new File(getFilesDir(), "todo.json").delete();
+            toast("Data diperbaiki — memulai ulang…");
+            ui.postDelayed(this::recreate, 400);
+        } catch (Throwable t) {
+            toast("Gagal memperbaiki: " + t);
+        }
     }
 
     private void toast(String s) {
