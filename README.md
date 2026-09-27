@@ -6,7 +6,7 @@ Dibangun tanpa Gradle: `aapt2 → ECJ → d8 → zipalign → apksigner`.
 Dibuat dari **bedah penuh ZCode Desktop v3.14.3** (Electron): design system, tool registry,
 mode agent, prompt, dan alur tool-use disalin sedapat mungkin identik dengan aslinya.
 
-## ✨ Fitur (v2.4.0)
+## ✨ Fitur (v2.4.1)
 
 ### Agent
 - 🤖 **Agent Chat** streaming (SSE) + tool-use loop ala ZCode Desktop (maks 30 ronde)
@@ -26,7 +26,7 @@ mode agent, prompt, dan alur tool-use disalin sedapat mungkin identik dengan asl
   daftar model **di-fetch dari `/models`** (parser toleran multi-format + dedupe) + kotak pencarian + input manual,
   validasi otomatis debounce 800ms dengan status granular & **pesan error dibersihkan** (bukan error mentah),
   deep-link ke halaman pembuatan API key, key/model/Base-URL per penyedia (migrasi otomatis dari versi lama)
-- 🐧 **Sandbox Linux (proot) ala Kai 9000 (diperbaiki di v2.4.0)** — Alpine Linux 3.20 + proot statis
+- 🐧 **Sandbox Linux (proot) ala Kai 9000 (diperbaiki di v2.4.0 & v2.4.1)** — Alpine Linux 3.20 + proot statis
   dibundel di APK; sekali tap **"Pasang sandbox"** di halaman Berkas, lalu **semua perintah
   Bash (tool agent + Terminal) berjalan di dalam rootfs**: `apk add git python3 nodejs`
   bisa dipakai dan **paketnya tersimpan**, proyek konsisten di `/workspace`, cwd persisten
@@ -35,7 +35,12 @@ mode agent, prompt, dan alur tool-use disalin sedapat mungkin identik dengan asl
   dulu diletakkan SETELAH `timeout` sehingga toybox menganggapnya nama program (exit 127
   di semua perangkat) — kini env var di depan. **Multi-ABI**: proot + rootfs dibundel
   untuk **arm64, armv7 (32-bit) & x86_64**, dipilih otomatis sesuai perangkat. Log
-  diagnostik pasang tersimpan di `sandbox-log.txt`
+  diagnostik pasang tersimpan di `sandbox-log.txt`. **v2.4.1 menuntaskan laporan
+  “gagal memasang / tidak bisa membuat rootfs”**: (1) race condition ditutup — dialog
+  pasang tak bisa dibatalkan & proses dobel terkunci `AtomicBoolean`; (2) sisa rootfs
+  lama dihapus 3x dengan verifikasi; (3) isi rootfs diverifikasi (busybox/sh/apk);
+  (4) error kini detail (ruang bebas, path); (5) dialog gagal punya tombol **Salin log**
+  & **Coba lagi**, log juga terbuka via tekan-lama status sandbox
 - 🔧 **Uji koneksi memakai model aktif** (v2.3.1 — sebelumnya hardcode `glm-4.5-flash`
   sehingga selalu gagal untuk penyedia lain)
 - 🚨 **System prompt kini benar-benar dikirim** (perbaikan v2.3.0 — sebelumnya `buildSystemPrompt()`
@@ -85,7 +90,7 @@ mode agent, prompt, dan alur tool-use disalin sedapat mungkin identik dengan asl
 - ☀️ Tema **Light default**, 🌙 Dark cadangan · 🇮🇩 UI Bahasa Indonesia
 
 ## 📲 Install APK
-1. Unduh [`out/ZCodeMobile-v2.4.0.apk`](out/ZCodeMobile-v2.4.0.apk) (11,9 MB — termasuk proot + rootfs Alpine untuk 3 arsitektur)
+1. Unduh [`out/ZCodeMobile-v2.4.1.apk`](out/ZCodeMobile-v2.4.1.apk) (11,9 MB — termasuk proot + rootfs Alpine untuk 3 arsitektur)
 2. Salin ke HP Android 8.0+
 3. Izinkan **"Install aplikasi dari sumber tidak dikenal"** untuk aplikasi yang dipakai membuka APK
 4. Install & buka **ZCode Mobile** (bisa update langsung dari v1.x/v2.x — signature sama)
@@ -105,7 +110,7 @@ Pipeline (tanpa Gradle, tanpa root):
 
 ## 🗂️ Struktur
 ```
-AndroidManifest.xml   v2.4.0 — minSdk 26, target 28 (syarat exec proot, pola Termux)
+AndroidManifest.xml   v2.4.1 — minSdk 26, target 28 (syarat exec proot, pola Termux)
 build.sh              pipeline build manual
 assets/sandbox/       proot statis + rootfs Alpine 3.20 utk arm64, armv7 & x86_64 (multi-ABI)
 java/com/zcodemobile/app/
@@ -135,6 +140,7 @@ out/                  APK rilis ter-signed
 | **v2.2.1** | **Perbaikan force close saat aplikasi dibuka (NPE `saved==null` pada instal baru/prefs kosong) + layar pemulihan anti crash-loop + dialog laporan error otomatis** |
 | **v2.3.0** | **BYOK hardcore 13 preset + fetch /models + validasi granular + system prompt benar-benar dikirim + tool Agent (subagent) + AGENTS.md + trim konteks + rename sesi** |
 | **v2.3.1** | **Fix bug bagian API key (error mentah dibersihkan, uji koneksi pakai model aktif, penjaga key/Base-URL kosong, respons basi dibasmi) + preset NVIDIA NIM + hapus model lokal + Sandbox Linux proot (Alpine dibundel, apk add tersimpan, cwd persisten, toggle aktif)** |
+| **v2.4.1** | **Tuntas “sandbox gagal dipasang / tidak bisa membuat rootfs”: kunci anti dobel-pasang (AtomicBoolean) + dialog pasang tak-batal + hapus & verifikasi rootfs lama 3x + verifikasi isi rootfs (busybox/sh/apk) + error detail (ruang/path) + dialog gagal dgn tombol Salin log & Coba lagi + log via tekan-lama status sandbox** |
 | **v2.4.0** | **Fix akar “sandbox gagal dipasang” (env var disandwich setelah `timeout` → exit 127 di semua perangkat) + multi-ABI arm64/armv7/x86_64 + log diagnostik pasang + fix teks terminal tak terlihat (palet tetap terang) + slash commands (/help /baru /bersihkan /ringkas /model /mode /init /sandbox…) + lampiran gambar vision (image_url) + diff berwarna di kartu Edit/Write** |
 
 ## 🔒 Lisensi & merek
