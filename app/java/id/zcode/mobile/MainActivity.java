@@ -45,9 +45,12 @@ import java.util.concurrent.TimeUnit;
  *      process.execPath dari env ZCODE_NODE.
  * Semua jalur env-driven (ZCODE_APPROOT dll) — tanpa terjemahan path apa pun.
  * DNS: dns-shim di bridge aktif otomatis (Android tak punya /etc/resolv.conf).
+ * v1.0.1: glibc bundel di-patch saat build (clone3 → return -ENOSYS) — Android 12
+ * membunuh clone3 dgn SIGSYS (exit=159 di log v1.0.0); dengan ENOSYS, glibc jatuh
+ * sendiri ke clone legacy yang di-whitelist Android.
  */
 public class MainActivity extends Activity {
-    private static final String VERSION = "1.0.0";
+    private static final String VERSION = "1.0.1";
     private int port = 8080; // dipilih dinamis — 8080 bisa terpakai app lain
     private FrameLayout root;
     private WebView web;
@@ -297,6 +300,8 @@ public class MainActivity extends Activity {
         env.put("PATH", sb + "/glibc/bin:/system/bin:/system/xbin");
         env.put("LANG", "C.UTF-8");
         env.put("TERM", "xterm");
+        // Asuransi: matikan registrasi rseq glibc (aman diabaikan bila tunable tak dikenal)
+        env.put("GLIBC_TUNABLES", "glibc.pthread.rseq=0");
         return env;
     }
 
@@ -323,7 +328,7 @@ public class MainActivity extends Activity {
                 nodeBin().getAbsolutePath(), "-e", "console.log('NODE_OK')" }, "NODE_OK", withNode)) {
             return "D2";
         }
-        throw new IllegalStateException("node glibc tidak bisa jalan di perangkat ini (D1 & D2 gagal) — lihat hasil probe di log");
+        throw new IllegalStateException("node glibc tidak bisa jalan (D1 & D2 gagal; exit≥128 = dibunuh sinyal/seccomp) — lihat baris probe di atas");
     }
 
     private void checkFile(String label, File f) {
@@ -364,8 +369,14 @@ public class MainActivity extends Activity {
         }
         rd.join(2000);
         String out = so.toString().trim();
-        blog("probe " + label + ": exit=" + p.exitValue() + (out.isEmpty() ? " (tanpa output)" : " → " + out));
-        return p.exitValue() == 0 && (mustContain == null || out.contains(mustContain));
+        int ev = p.exitValue();
+        String why = "";
+        if (ev >= 128 && ev - 128 <= 64) {
+            int sig = ev - 128;
+            why = " = dibunuh sinyal " + sig + (sig == 31 ? " (SIGSYS: syscall diblokir seccomp Android)" : "");
+        }
+        blog("probe " + label + ": exit=" + ev + why + (out.isEmpty() ? " (tanpa output)" : " → " + out));
+        return ev == 0 && (mustContain == null || out.contains(mustContain));
     }
 
     private void deleteRecursive(File f) {
@@ -419,7 +430,7 @@ public class MainActivity extends Activity {
         requirePath(loaderBin(), "loader glibc");
         if (!dataDir.isDirectory()) throw new IllegalStateException("dir data tidak bisa dibuat");
         mark.createNewFile();
-        blog("instal payload v1.0 selesai: " + sbDir().getAbsolutePath());
+        blog("instal payload v1.0.1 (glibc anti-clone3) selesai: " + sbDir().getAbsolutePath());
     }
 
     /** Ekstrak satu bundle tar.gz dari assets ke sbDir (path top-level: glibc/ zhost/). */

@@ -155,3 +155,43 @@ proot dari jalur utama. Semua ELF arm64 — dijaga gerbang verify.
   device (satu log = satu perbaikan berbasis bukti, bukan tebakan)? `ya / tidak`
 
 Setelah K1 & K2 disetujui → eksekusi Fase A–E tanpa menunggu lagi.
+
+---
+
+## REVISI 3 — v1.0.1: post-mortem exit=159 (SIGSYS) & patch clone3
+
+Tanggal: 14 Okt 2026 — pasca-review perangkat (itel S665L, Android 12 / SDK 31)
+
+### Laporan perangkat (v1.0.0)
+- D1 node-langsung: exit=159 (tanpa output) · D2 loader-prefix: exit=159 (tanpa output)
+- exit=159 = 128+31 → proses DIBUNUH SINYAL 31 = SIGSYS ("Bad system call")
+
+### Analisis (rantai bukti)
+1. Dokumentasi resmi Android (diagnose native crashes): syscall yang tidak
+   di-whitelist filter seccomp aplikasi → proses menerima SIGSYS (SYS_SECCOMP)
+   — dibunuh kernel, bukan error biasa.
+2. glibc ≥ 2.34 memakai clone3 untuk pthread_create (+ situs internal lain);
+   fallback ke clone legacy HANYA terjadi bila clone3 mengembalikan -ENOSYS
+   (glibc clone-internal.c; korelasi: elastic/apm-server#6238, qiling#1638).
+3. Di Android 12 clone3 tidak masuk whitelist seccomp aplikasi → seccomp
+   membunuh proses (SIGSYS) SEBELUM fallback ENOSYS sempat terjadi → node mati
+   sebelum mencetak apa pun = persis gejala v1.0.0. (D1 & D2 gagal identik
+   karena keduanya memuat libc.so.6 yang sama.)
+4. Scan libc.so.6 bundel (Ubuntu jammy arm64, glibc 2.35): 3 situs stub
+   `mov x8,#220; svc #0` (clone3) ditemukan — wrapper publik + 2 situs internal.
+
+### Solusi v1.0.1 (bedah-inti — tetap tanpa aplikasi luar, tanpa proot)
+- assets-src/patch-clone3.py (baru): ganti stub clone3 → `mov w0,#-38; ret`
+  (return -ENOSYS) → glibc jatuh sendiri ke clone legacy yang di-whitelist
+  Android. Encoding diverifikasi disassembler capstone; x64: `mov eax,220;
+  syscall` → `mov eax,-38; ret`.
+- assets/zcode/zrt-arm64.tar.gz di-rebuild: listing tar identik dgn v1.0.0,
+  isi core bridge byte-identik — hanya 24 byte di libc.so.6 yang berubah.
+- VALIDASI EMULASI: node v22.20.0 arm64 + glibc patched BOOT SUKSES lewat
+  qemu-user-static (gaya D2: loader --library-path) → "v22.20.0", exit=0 —
+  pthread_create berjalan lewat jalur fallback clone.
+- Gerbang verify-payload.py: aturan baru — "CLONE3 AKTIF" = build GAGAL.
+- assemble-v10.sh: langkah [6b/8] patch otomatis (reproducible utk rebuild penuh).
+- MainActivity v1.0.1: marker payload-1.0.1.ok (payload lama otomatis dipasang
+  ulang), decode exit ≥128 → nama sinyal di log probe, GLIBC_TUNABLES=
+  glibc.pthread.rseq=0 (asuransi rseq), versionCode 101.

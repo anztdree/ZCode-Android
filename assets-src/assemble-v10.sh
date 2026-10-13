@@ -98,6 +98,10 @@ done < <(find "$TMP" -type d -name "$TRIPLET")
 rm -rf "$TMP"
 echo "   libs: $(ls "$OUT/glibc/lib" | wc -l) file"
 
+echo "▶ [6b/8] patch clone3 → return -ENOSYS (Android 12+ membunuh clone3 dgn SIGSYS)"
+python3 "$SRC/patch-clone3.py" patch "$OUT/glibc/lib"
+python3 "$SRC/patch-clone3.py" check "$OUT/glibc/lib"
+
 echo "▶ [7/8] node v$NODE_VER resmi (nodejs.org) + strip debug info"
 tar xJf "$DL/node22-$ARCH.tar.xz" -C "$OUT/glibc/bin" --strip-components=2 "node-v$NODE_VER-linux-$NODEARCH/bin/node"
 chmod +x "$OUT/glibc/bin/node"

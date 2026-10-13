@@ -164,6 +164,24 @@ for c in critical:
     if not os.path.exists(os.path.join(PAYLOAD, c)):
         violations.append(f"PATH KRITIKAL HILANG: {c}")
 
+# --- 6: clone3 wajib sudah dipatch (Android 12+ membunuh clone3 dgn SIGSYS —
+#        post-mortem v1.0.0: exit=159 = 128+31 di itel S665L) ---
+CLONE3_OLD = {183: bytes.fromhex("881b80d2010000d4"),   # mov x8,#220; svc #0 (arm64)
+              62:  bytes.fromhex("b8dc0000000f05")}      # mov eax,220; syscall (x64)
+clone3_sites = 0
+for root, _dirs, files in os.walk(GLIBC):
+    for fn in sorted(files):
+        p = os.path.join(root, fn)
+        if os.path.islink(p) or not is_elf(p):
+            continue
+        old = CLONE3_OLD.get(elf_machine(p))
+        if old:
+            with open(p, "rb") as f:
+                n = f.read().count(old)
+            if n:
+                clone3_sites += n
+                violations.append(f"CLONE3 AKTIF ({n} situs): {p} — jalankan patch-clone3.py patch")
+
 print(f"ELF diperiksa: {checked['elf']}, NEEDED diperiksa: {checked['needed']}")
 if violations:
     print(f"❌ GAGAL — {len(violations)} pelanggaran:")
