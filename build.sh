@@ -5,9 +5,9 @@
 # ============================================================
 set -e
 ROOT="/home/z/ZCode-Android"
-BT="$HOME/android-toolchain/bt/android-14"
-PLATFORM="$HOME/android-toolchain/platforms/android-34/android.jar"
-ECJ="$HOME/android-toolchain/ecj.jar"
+BT="$HOME/toolchain/bt/android-14"
+PLATFORM="$HOME/toolchain/platforms/android-34/android.jar"
+ECJ="$HOME/toolchain/ecj.jar"
 OUT="$ROOT/build-out"
 export LD_LIBRARY_PATH="$BT/lib64:$LD_LIBRARY_PATH"
 
@@ -28,7 +28,7 @@ echo "▶ [2/7] aapt2 link (manifest + resources + assets)..."
 echo "▶ [3/7] ECJ compile Java..."
 java -jar "$ECJ" -nowarn -encoding UTF-8 \
   -source 8 -target 8 \
-  -bootclasspath "$HOME/android-toolchain/stubs.jar:$PLATFORM" \
+  -bootclasspath "$HOME/toolchain/bt/android-14/core-lambda-stubs.jar:$PLATFORM" \
   -d "$OUT/classes" \
   $(find app/java "$OUT/gen" -name "*.java" 2>/dev/null)
 

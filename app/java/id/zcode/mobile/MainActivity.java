@@ -35,15 +35,19 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * ZCode Mobile v4 — shell tipis: pasang payload Desktop asli → jalankan engine
- * (proot + node + core/main.mjs) → tampilkan renderer asli di WebView.
+ * ZCode Mobile v1.0 — shell tipis: pasang payload Desktop asli → jalankan engine
+ * (node glibc LANGSUNG, TANPA proot/chroot) → tampilkan renderer asli di WebView.
  *
- * v4.0.4: proot arm64 diganti build Termux (loader eksternal + patch Android:
- * f2fs/seccomp/link2symlink) — build vanilla 5.3.0 gagal senyap (exit 255) saat
- * exec guest. Matriks probe diagnostik (file + exec bertahap), start engine
- * adaptif (node langsung / via loader glibc / via wrapper).
+ * Arsitektur boot (tangga gaya, dipilih otomatis):
+ *  D1: exec node langsung — PT_INTERP node sudah menunjuk loader glibc milik app
+ *      (dipatch saat build). process.execPath benar → spawn CLI agent beres.
+ *  D2: exec loader glibc eksplisit (--library-path) — bridge meng-override
+ *      process.execPath dari env ZCODE_NODE.
+ * Semua jalur env-driven (ZCODE_APPROOT dll) — tanpa terjemahan path apa pun.
+ * DNS: dns-shim di bridge aktif otomatis (Android tak punya /etc/resolv.conf).
  */
 public class MainActivity extends Activity {
+    private static final String VERSION = "1.0.0";
     private int port = 8080; // dipilih dinamis — 8080 bisa terpakai app lain
     private FrameLayout root;
     private WebView web;
@@ -52,6 +56,7 @@ public class MainActivity extends Activity {
     private Button copyBtn;
     private Process engine;
     private volatile boolean engineReady = false;
+    private String bootStyle = "D1";
 
     private final StringBuilder bootLog = new StringBuilder();
 
@@ -72,7 +77,7 @@ public class MainActivity extends Activity {
         s.setUseWideViewPort(true);
         s.setSupportZoom(false);
         s.setTextZoom(100);
-        s.setUserAgentString(s.getUserAgentString() + " ZCodeMobile/4.0");
+        s.setUserAgentString(s.getUserAgentString() + " ZCodeMobile/1.0");
         web.setWebChromeClient(new WebChromeClient());
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -91,12 +96,12 @@ public class MainActivity extends Activity {
 
         new Thread(() -> {
             try {
-                blog("boot v4.0.4 abi=" + pickAbi() + " android=" + android.os.Build.VERSION.RELEASE);
+                blog("boot v" + VERSION + " abi=" + pickAbi() + " android=" + android.os.Build.VERSION.RELEASE
+                        + " (" + android.os.Build.VERSION.SDK_INT + ")");
                 installIfNeeded();
-                // payload lama (v4.0.1/4.0.2) belum membawa loader /lib64 — pasang di tempat
-                ensureGlibcCompat();
                 postSplash("Memeriksa runtime…");
-                String style = probeMatrix();
+                String style = probeBootStyle();
+                bootStyle = style;
                 startEngine(style);
                 waitHealthy(240_000);
                 runOnUiThread(() -> {
@@ -111,7 +116,7 @@ public class MainActivity extends Activity {
         }, "zcode-boot").start();
     }
 
-    /** Pilih port bebas 8080–8089 ( hindari bentrok dgn app lain). */
+    /** Pilih port bebas 8080–8089 (hindari bentrok dgn app lain). */
     private int pickPort() {
         for (int p = 8080; p < 8090; p++) {
             try (java.net.ServerSocket s = new java.net.ServerSocket(p)) { return p; }
@@ -194,8 +199,10 @@ public class MainActivity extends Activity {
     }
 
     private synchronized void blog(String line) {
-        bootLog.append(line).append('\n');
-        if (bootLog.length() > 200_000) bootLog.delete(0, 100_000);
+        synchronized (bootLog) {
+            bootLog.append(line).append('\n');
+            if (bootLog.length() > 200_000) bootLog.delete(0, 100_000);
+        }
     }
 
     private void showFatal(Throwable t) {
@@ -210,12 +217,12 @@ public class MainActivity extends Activity {
 
     private void copyLogToClipboard() {
         StringBuilder sb = new StringBuilder();
-        sb.append("=== ZCode Mobile v4.0.4 boot log ===\n");
+        sb.append("=== ZCode Mobile v").append(VERSION).append(" boot log ===\n");
         sb.append("ABI: ").append(android.os.Build.SUPPORTED_ABIS[0]).append('\n');
         sb.append("Android: ").append(android.os.Build.VERSION.RELEASE)
           .append(" (SDK ").append(android.os.Build.VERSION.SDK_INT).append(")\n");
         sb.append("Model: ").append(android.os.Build.MANUFACTURER).append(' ').append(android.os.Build.MODEL).append('\n');
-        sb.append("Port: ").append(port).append("\n\n");
+        sb.append("Port: ").append(port).append(" | Gaya boot: ").append(bootStyle).append("\n\n");
         synchronized (bootLog) { sb.append(bootLog); }
         try {
             File lf = new File(getFilesDir(), "engine.log");
@@ -241,36 +248,24 @@ public class MainActivity extends Activity {
         } catch (Throwable ignore) { }
     }
 
-    // ---------------- instalasi payload ----------------
+    // ---------------- layout payload (tanpa proot) ----------------
     private File sbDir() { return new File(getFilesDir(), "sandbox"); }
-    private File rootfsDir() { return new File(sbDir(), "rootfs"); }
-    private File prootBin() { return new File(sbDir(), "proot"); }
+    private File zhostDir() { return new File(sbDir(), "zhost"); }
+    private File glibcDir() { return new File(sbDir(), "glibc"); }
+    private File nodeBin() { return new File(glibcDir(), "bin/node"); }
+    private File loaderBin() {
+        String abi = pickAbi();
+        return new File(glibcDir(), "lib/" + ("arm".equals(abi) ? "ld-linux-armhf.so.3" : "ld-linux-aarch64.so.1"));
+    }
 
     private String pickAbi() {
         for (String a : android.os.Build.SUPPORTED_ABIS) {
             if (a.startsWith("arm64")) return "arm64";
-            if (a.startsWith("armeabi")) return "arm";
         }
-        return "arm64";
+        return "none";
     }
 
-    /** Nama dynamic loader glibc sesuai ABI. */
-    private String glibcLoader() {
-        String abi = pickAbi();
-        if ("arm".equals(abi)) return "ld-linux-armhf.so.3";
-        if ("arm64".equals(abi)) return "ld-linux-aarch64.so.1";
-        return "ld-linux-x86-64.so.2";
-    }
-
-    /** Nama dynamic loader musl (rootfs Alpine) sesuai ABI. */
-    private String muslLoader() {
-        String abi = pickAbi();
-        if ("arm".equals(abi)) return "ld-musl-armhf.so.3";
-        if ("arm64".equals(abi)) return "ld-musl-aarch64.so.1";
-        return "ld-musl-x86_64.so.1";
-    }
-
-    private String marker() { return new File(getFilesDir(), "payload-3.15.1.ok").getAbsolutePath(); }
+    private String marker() { return new File(getFilesDir(), "payload-1.0.ok").getAbsolutePath(); }
 
     private final java.util.ArrayDeque<String> engineTail = new java.util.ArrayDeque<>();
     private long lastSplashLog = 0;
@@ -292,112 +287,43 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ---------------- env proot ----------------
-    /** Env dasar utk SEMUA pemanggilan proot (probe & engine). */
+    /** Env dasar untuk node (D1/D2) — jalur ABSOLUT milik app, bukan guest proot. */
     private Map<String, String> baseEnv() {
         Map<String, String> env = new HashMap<>();
-        env.put("PROOT_NO_SECCOMP", "1");
-        env.put("PROOT_TMP_DIR", getCacheDir().getAbsolutePath());
-        // proot Termux (bionic) butuh libtalloc.so.2 + libandroid-shmem.so dari sbDir/lib;
-        // loader termux berupa file terpisah — diarahkan via PROOT_LOADER
-        File loader = new File(sbDir(), "loader");
-        if (loader.isFile()) {
-            env.put("PROOT_LOADER", loader.getAbsolutePath());
-            File l32 = new File(sbDir(), "loader32");
-            if (l32.isFile()) env.put("PROOT_LOADER_32", l32.getAbsolutePath());
-        }
-        File libDir = new File(sbDir(), "lib");
-        StringBuilder ld = new StringBuilder();
-        if (libDir.isDirectory()) ld.append(libDir.getAbsolutePath()).append(':');
-        ld.append("/opt/zhost/glibc/lib");
-        env.put("LD_LIBRARY_PATH", ld.toString());
-        env.put("HOME", "/opt/zhost/data");
-        env.put("TMPDIR", "/tmp");
-        env.put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/zhost/glibc/bin");
+        String sb = sbDir().getAbsolutePath();
+        env.put("LD_LIBRARY_PATH", sb + "/glibc/lib");
+        env.put("HOME", sb + "/data");
+        env.put("TMPDIR", getCacheDir().getAbsolutePath());
+        env.put("PATH", sb + "/glibc/bin:/system/bin:/system/xbin");
+        env.put("LANG", "C.UTF-8");
+        env.put("TERM", "xterm");
         return env;
     }
 
-    // ---------------- glibc compat (fix device: loader /lib64) ----------------
+    // ---------------- tangga gaya boot: D1 → D2 ----------------
     /**
-     * Node resmi glibc butuh dynamic loader di /lib64/<ld> — rootfs Alpine (musl)
-     * tidak memilikinya, sehingga execve node gagal. Loader sudah ada di payload
-     * (opt/zhost/glibc/lib) — cukup disalin ke lib64. Idempoten & murah.
+     * D1: node langsung (PT_INTERP = loader milik app, dipatch saat build).
+     * D2: loader-prefix eksplisit (--library-path) — cadangan bila interp
+     *     tidak cocok (mis. profil kerja /data/user/10). Bridge meng-override
+     *     process.execPath dari env ZCODE_NODE agar spawn CLI agent tetap benar.
      */
-    private void ensureGlibcCompat() {
-        String ld = glibcLoader();
-        File src = new File(rootfsDir(), "opt/zhost/glibc/lib/" + ld);
-        File dstDir = new File(rootfsDir(), "lib64");
-        File dst = new File(dstDir, ld);
-        if (!src.isFile() || dst.isFile()) return;
-        try {
-            dstDir.mkdirs();
-            try (FileInputStream in = new FileInputStream(src); FileOutputStream fo = new FileOutputStream(dst)) {
-                byte[] buf = new byte[1 << 14];
-                int n;
-                while ((n = in.read(buf)) > 0) fo.write(buf, 0, n);
-            }
-            chmodExec(dst);
-            blog("glibc-compat: " + ld + " dipasang di lib64 (" + src.length() + " B)");
-        } catch (Throwable t) {
-            blog("glibc-compat GAGAL: " + t);
+    private String probeBootStyle() throws Exception {
+        checkFile("node", nodeBin());
+        checkFile("loader glibc", loaderBin());
+        checkFile("engine utama", new File(zhostDir(), "out/main/index.js"));
+        checkFile("core bridge", new File(zhostDir(), "core/src/main.mjs"));
+
+        if (runProbe("D1 node-langsung", new String[]{ nodeBin().getAbsolutePath(), "-e", "console.log('NODE_OK')" }, "NODE_OK", null)) {
+            return "D1";
         }
-    }
-
-    // ---------------- matriks probe diagnostik ----------------
-    /**
-     * Lapisan diperiksa berurutan dan SEMUA hasil dicatat (tidak fail-fast):
-     *  [berkas]  integritas payload dibaca dari sisi host
-     *  [hostsh]  proot melacak proses host Android (/system/bin/sh) → mesin proot sehat?
-     *  [busybox] ELF musl guest dieksekusi langsung
-     *  [echo]    symlink /bin/echo (repro baseline v4.0.3)
-     *  [node]    3 gaya start: langsung / via loader glibc / via wrapper
-     * gaya node pertama yang sukses dipakai untuk memulai engine.
-     */
-    private String probeMatrix() throws Exception {
-        // 0) info host
-        runSimple("uname", "/system/bin/uname", "-r");
-        runSimple("patch", "/system/bin/getprop", "ro.build.version.security_patch");
-
-        // 1) integritas berkas payload (sisi host, tanpa eksekusi)
-        checkFile("rootfs/bin/busybox", new File(rootfsDir(), "bin/busybox"));
-        checkFile("rootfs/bin/sh", new File(rootfsDir(), "bin/sh"));
-        checkFile("rootfs/bin/echo", new File(rootfsDir(), "bin/echo"));
-        checkFile("rootfs/lib/" + muslLoader(), new File(rootfsDir(), "lib/" + muslLoader()));
-        checkFile("rootfs/lib64/" + glibcLoader(), new File(rootfsDir(), "lib64/" + glibcLoader()));
-        checkFile("guest node", new File(rootfsDir(), "opt/zhost/glibc/bin/node"));
-        checkFile("guest wrapper", new File(rootfsDir(), "usr/bin/node"));
-        checkFile("proot", prootBin());
-
-        String rfs = rootfsDir().getAbsolutePath();
-        String proot = prootBin().getAbsolutePath();
-        String musl = "/lib/" + muslLoader();
-        String gld = "/lib64/" + glibcLoader();
-
-        // 2) diagnostik eksekusi (hasil dicatat, tidak menghentikan)
-        runProbe("hostsh", new String[]{ proot, "-R", rfs, "-b", "/system/bin", "/system/bin/sh", "-c", "echo HOSTSH_OK" }, "HOSTSH_OK", null);
-        runProbe("busybox", new String[]{ proot, "-R", rfs, "/bin/busybox", "echo", "BB_OK" }, "BB_OK", null);
-        runProbe("echo", new String[]{ proot, "-R", rfs, "/bin/echo", "E_OK" }, "E_OK", null);
-        runProbe("echo-min", new String[]{ proot, "-r", rfs, "/bin/echo", "E_OK" }, "E_OK", null);
-        runProbe("musl-ld", new String[]{ proot, "-R", rfs, musl, "/bin/echo", "MUSL_OK" }, "MUSL_OK", null);
-
-        Map<String, String> verbose = new HashMap<>();
-        verbose.put("PROOT_VERBOSE", "1");
-        runProbe("echo-verbose", new String[]{ proot, "-R", rfs, "/bin/echo", "E_OK" }, null, verbose);
-
-        // 3) gaya start node — keputusan nyata
-        if (runProbe("node-direct", new String[]{ proot, "-R", rfs, "-w", "/opt/zhost",
-                "/opt/zhost/glibc/bin/node", "--version" }, "v", null)) {
-            return "direct";
+        Map<String, String> withNode = new HashMap<>();
+        withNode.put("ZCODE_NODE", nodeBin().getAbsolutePath());
+        if (runProbe("D2 loader-prefix", new String[]{ loaderBin().getAbsolutePath(),
+                "--library-path", glibcDir().getAbsolutePath() + "/lib",
+                nodeBin().getAbsolutePath(), "-e", "console.log('NODE_OK')" }, "NODE_OK", withNode)) {
+            return "D2";
         }
-        if (runProbe("node-loader", new String[]{ proot, "-R", rfs, "-w", "/opt/zhost", gld,
-                "--library-path", "/opt/zhost/glibc/lib", "/opt/zhost/glibc/bin/node", "--version" }, "v", null)) {
-            return "loader";
-        }
-        if (runProbe("node-wrapper", new String[]{ proot, "-R", rfs, "-w", "/opt/zhost",
-                "/usr/bin/node", "--version" }, "v", null)) {
-            return "wrapper";
-        }
-        throw new IllegalStateException("semua gaya start node gagal — lihat hasil matriks di log");
+        throw new IllegalStateException("node glibc tidak bisa jalan di perangkat ini (D1 & D2 gagal) — lihat hasil probe di log");
     }
 
     private void checkFile(String label, File f) {
@@ -405,25 +331,13 @@ public class MainActivity extends Activity {
         else blog("file " + label + ": HILANG!");
     }
 
-    /** Info host (tidak fatal bila gagal). */
-    private void runSimple(String label, String cmd, String arg) {
-        try {
-            Process p = new ProcessBuilder(cmd, arg).redirectErrorStream(true).start();
-            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String out = r.readLine();
-            r.close();
-            blog("host " + label + ": " + out);
-        } catch (Throwable t) {
-            blog("host " + label + ": (tidak tersedia)");
-        }
-    }
-
     /**
      * Jalankan satu probe; kembalikan true bila exit 0 & mustContain ada.
-     * Output selalu dicatat ke bootLog; kegagalan TIDAK dilempar (matriks lanjut).
+     * Output selalu dicatat ke bootLog; kegagalan TIDAK dilempar (tangga lanjut).
      */
     private boolean runProbe(String label, String[] cmd, String mustContain, Map<String, String> extraEnv) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.directory(zhostDir());
         Map<String, String> env = baseEnv();
         if (extraEnv != null) env.putAll(extraEnv);
         pb.environment().putAll(env);
@@ -476,107 +390,45 @@ public class MainActivity extends Activity {
 
     private void installIfNeeded() throws Exception {
         String abi = pickAbi();
-        File mark = new File(marker());
-        File legacy = new File(getFilesDir(), "installed-v4.0.1"); // payload v4.0.1 sama — jangan ekstrak ulang
-        File rootfsBin = new File(rootfsDir(), "bin/busybox");
-        boolean have = mark.exists() || legacy.exists();
-        if (have && rootfsBin.exists() && prootBin().canExecute()) {
-            if (!mark.exists()) { try { mark.createNewFile(); } catch (Exception ignore) { } }
-            // proot + loader + lib SELALU disegarkan dari APK — binary proot vanilla
-            // lama (v4.0.1) gagal senyap saat exec guest; ganti tanpa ekstrak ulang payload
-            try {
-                copyAsset("sandbox/proot_" + abi, prootBin());
-                chmodExec(prootBin());
-            } catch (Throwable t) {
-                blog("refresh proot gagal (pakai yang terpasang): " + t);
-            }
-            installProotHelpers();
-            return;
+        if (!"arm64".equals(abi)) {
+            throw new IllegalStateException("Perangkat " + (android.os.Build.SUPPORTED_ABIS.length > 0 ? android.os.Build.SUPPORTED_ABIS[0] : "?")
+                    + " belum didukung — v1.0 memakai payload arm64-v8a");
         }
-        postSplash("Memasang payload Desktop (" + abi + ")…");
-        // payload lama (mis. hasil extractor rusak v4.0.0) dibersihkan total — mulai bersih
+        File mark = new File(marker());
+        if (mark.exists() && nodeBin().isFile() && new File(zhostDir(), "out/main/index.js").isFile()) {
+            return; // payload v1.0 sudah terpasang
+        }
+        postSplash("Memasang payload Desktop (arm64)…");
+        // payload lama (v4.x dgn proot/rootfs) dibersihkan total — arsitektur berubah
         deleteRecursive(sbDir());
         sbDir().mkdirs();
-        if (!assetExists("zcode/zrt-" + abi + ".tar.gz"))
-            throw new IllegalStateException("Perangkat " + abi + " belum didukung — butuh arm64-v8a");
-        // 1) proot
-        File proot = prootBin();
-        copyAsset("sandbox/proot_" + abi, proot);
-        chmodExec(proot);
-        installProotHelpers();
-        // 2) rootfs
-        File rootfsTgz = new File(getCacheDir(), "rootfs.tar.gz");
-        copyAsset("sandbox/rootfs_" + abi + ".tar.gz", rootfsTgz);
-        postSplash("Membongkar rootfs…");
-        Tar.extractTarGz(rootfsTgz, rootfsDir(), msg -> postSplash("rootfs: " + baseName(msg)));
-        rootfsTgz.delete();
-        // 3) runtime node glibc (usr/bin/node + /opt/zhost/glibc + lib64 loader)
-        postSplash("Memasang runtime Node…");
-        File zrtTgz = new File(getCacheDir(), "zrt.tar.gz");
-        copyAsset("zcode/zrt-" + abi + ".tar.gz", zrtTgz);
-        Tar.extractTarGz(zrtTgz, rootfsDir(), null);
-        zrtTgz.delete();
-        File node = new File(rootfsDir(), "opt/zhost/glibc/bin/node");
-        chmodExec(node);
-        // 4) host engine (res/glm + apps/zcode-cli)
-        postSplash("Memasang host ZCode…");
-        File zhostTgz = new File(getCacheDir(), "zhost.tar.gz");
-        copyAsset("zcode/zhost.tar.gz", zhostTgz);
-        Tar.extractTarGz(zhostTgz, new File(rootfsDir(), "opt"), msg -> postSplash("host: " + baseName(msg)));
-        zhostTgz.delete();
-        // 5) main + preload + node_modules + core
-        postSplash("Memasang mesin utama…");
-        File zmainTgz = new File(getCacheDir(), "zmain.tar.gz");
-        copyAsset("zcode/zmain.tar.gz", zmainTgz);
-        Tar.extractTarGz(zmainTgz, new File(rootfsDir(), "opt"), msg -> postSplash("mesin: " + baseName(msg)));
-        zmainTgz.delete();
-        // 6) UI renderer asli
-        postSplash("Memasang antarmuka Desktop…");
-        File zuiTgz = new File(getCacheDir(), "zui.tar.gz");
-        copyAsset("zcode/zui.tar.gz", zuiTgz);
-        Tar.extractTarGz(zuiTgz, new File(rootfsDir(), "opt"), msg -> postSplash("UI: " + baseName(msg)));
-        zuiTgz.delete();
-        // 7) verifikasi hasil instalasi — gagal cepat & jelas bila tak lengkap
-        File dataDir = new File(rootfsDir(), "opt/zhost/data");
+        extractBundle("zcode/zrt-arm64.tar.gz", "runtime node+glibc");
+        chmodExec(nodeBin());
+        chmodExec(loaderBin());
+        extractBundle("zcode/zcode-app.tar.gz", "mesin utama");
+        extractBundle("zcode/zcode-ui.tar.gz", "antarmuka Desktop");
+        extractBundle("zcode/zcode-res.tar.gz", "resource glm/tools");
+        // verifikasi hasil instalasi — gagal cepat & jelas bila tak lengkap
+        File dataDir = new File(zhostDir(), "data");
         dataDir.mkdirs();
-        requirePath(new File(rootfsDir(), "bin/busybox"), "rootfs/bin/busybox");
-        requirePath(node, "runtime node");
-        requirePath(new File(rootfsDir(), "opt/zhost/core/src/main.mjs"), "core/main.mjs");
-        requirePath(new File(rootfsDir(), "opt/zhost/out/main/index.js"), "engine utama");
-        requirePath(new File(rootfsDir(), "opt/zhost/out/renderer/index.html"), "antarmuka Desktop");
-        requirePath(new File(rootfsDir(), "opt/zhost/res/glm"), "resource glm");
+        requirePath(nodeBin(), "runtime node");
+        requirePath(new File(zhostDir(), "core/src/main.mjs"), "core/main.mjs");
+        requirePath(new File(zhostDir(), "out/main/index.js"), "engine utama");
+        requirePath(new File(zhostDir(), "out/renderer/index.html"), "antarmuka Desktop");
+        requirePath(new File(zhostDir(), "res/glm/zcode.cjs"), "resource glm");
+        requirePath(loaderBin(), "loader glibc");
         if (!dataDir.isDirectory()) throw new IllegalStateException("dir data tidak bisa dibuat");
         mark.createNewFile();
-        ensureGlibcCompat();
+        blog("instal payload v1.0 selesai: " + sbDir().getAbsolutePath());
     }
 
-    /** Loader + lib pendamping proot Termux (tidak ada di payload lama → opsional). */
-    private void installProotHelpers() throws Exception {
-        String abi = pickAbi();
-        if (assetExists("sandbox/prootloader_" + abi)) {
-            File loader = new File(sbDir(), "loader");
-            copyAsset("sandbox/prootloader_" + abi, loader);
-            chmodExec(loader);
-        }
-        if (assetExists("sandbox/prootloader32_" + abi)) {
-            File loader32 = new File(sbDir(), "loader32");
-            copyAsset("sandbox/prootloader32_" + abi, loader32);
-            chmodExec(loader32);
-        }
-        if (assetExists("sandbox/libtalloc_" + abi + ".so")) {
-            File libDir = new File(sbDir(), "lib");
-            libDir.mkdirs();
-            File talloc = new File(libDir, "libtalloc.so.2");
-            copyAsset("sandbox/libtalloc_" + abi + ".so", talloc);
-            chmodExec(talloc);
-        }
-        if (assetExists("sandbox/libshmem_" + abi + ".so")) {
-            File libDir = new File(sbDir(), "lib");
-            libDir.mkdirs();
-            File shmem = new File(libDir, "libandroid-shmem.so");
-            copyAsset("sandbox/libshmem_" + abi + ".so", shmem);
-            chmodExec(shmem);
-        }
+    /** Ekstrak satu bundle tar.gz dari assets ke sbDir (path top-level: glibc/ zhost/). */
+    private void extractBundle(String asset, String label) throws Exception {
+        postSplash("Membongkar " + label + "…");
+        File tgz = new File(getCacheDir(), "bundle.tar.gz");
+        copyAsset(asset, tgz);
+        Tar.extractTarGz(tgz, sbDir(), msg -> postSplash(label + ": " + baseName(msg)));
+        tgz.delete();
     }
 
     private void copyAsset(String asset, File out) throws Exception {
@@ -597,43 +449,31 @@ public class MainActivity extends Activity {
 
     // ---------------- engine ----------------
     private void startEngine(String style) throws Exception {
-        String nodePath = "/opt/zhost/glibc/bin/node";
-        String rfs = rootfsDir().getAbsolutePath();
+        String sb = sbDir().getAbsolutePath();
         java.util.List<String> argv = new java.util.ArrayList<>();
-        argv.add(prootBin().getAbsolutePath());
-        argv.add("-R");
-        argv.add(rfs);
-        argv.add("-w");
-        argv.add("/opt/zhost");
-        if ("loader".equals(style)) {
-            argv.add("/lib64/" + glibcLoader());
+        if ("D2".equals(style)) {
+            argv.add(loaderBin().getAbsolutePath());
             argv.add("--library-path");
-            argv.add("/opt/zhost/glibc/lib");
-        } else if ("wrapper".equals(style)) {
-            argv.add("/usr/bin/node");
-        } else {
-            argv.add(nodePath);
+            argv.add(sb + "/glibc/lib");
         }
-        argv.add("/opt/zhost/core/src/main.mjs");
+        argv.add(nodeBin().getAbsolutePath());
+        argv.add(sb + "/zhost/core/src/main.mjs");
         blog("engine start gaya=" + style);
 
         File logFile = new File(getFilesDir(), "engine.log");
         ProcessBuilder pb = new ProcessBuilder(argv);
+        pb.directory(zhostDir()); // cwd = ROOT — findUpward CLI agent & jalur relatif beres
         Map<String, String> env = baseEnv();
-        // PENTING: HOME TIDAK BOLEH /root — proot -R mem-bind $HOME host ke guest;
-        // di Android /root host tak bisa ditulis app → EACCES. Pakai dir data di dalam sandbox.
-        env.put("LANG", "C.UTF-8");
-        env.put("TERM", "xterm");
-        env.put("ZCODE_APPROOT", "/opt/zhost");
-        env.put("ZCODE_RES", "/opt/zhost/res");
-        env.put("ZCODE_USERDATA", "/opt/zhost/data/.zcode-data");
+        env.put("ZCODE_NODE", nodeBin().getAbsolutePath()); // override execPath utk D2 (diabaikan D1)
+        env.put("ZCODE_APPROOT", sb + "/zhost");
+        env.put("ZCODE_RES", sb + "/zhost/res");
+        env.put("ZCODE_USERDATA", sb + "/zhost/data/.zcode-data");
         env.put("ZCODE_PORT", String.valueOf(port));
         env.put("ZCODE_VERSION", "3.15.1");
         env.put("ZCODE_LOCALE", "id-ID");
         env.put("ZCODE_SCREEN_W", String.valueOf(screenPx(true)));
         env.put("ZCODE_SCREEN_H", String.valueOf(screenPx(false)));
         env.put("ZCODE_DPR", String.valueOf(getResources().getDisplayMetrics().density));
-        env.put("ELECTRON_RUN_AS_NODE", "1");
         pb.environment().putAll(env);
         // KRITIS: stdout+stderr DIGABUNG & DIBACA terus-menerus. Tanpa ini, pipe stdout
         // (64KB) meluap saat engine rajin menulis log → proses BEKU selamanya
