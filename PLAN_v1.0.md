@@ -195,3 +195,49 @@ Tanggal: 14 Okt 2026 — pasca-review perangkat (itel S665L, Android 12 / SDK 31
 - MainActivity v1.0.1: marker payload-1.0.1.ok (payload lama otomatis dipasang
   ulang), decode exit ≥128 → nama sinyal di log probe, GLIBC_TUNABLES=
   glibc.pthread.rseq=0 (asuransi rseq), versionCode 101.
+
+---
+
+## REVISI 4 — v1.0.2: akar masalah sejati = set_robust_list(99); koreksi jujur v1.0.1
+
+### Koreksi kesalahan v1.0.1 (diakui penuh)
+- Patch v1.0.1 salah sasaran: pola `mov x8,#220` = syscall **clone** (nr 220),
+  BUKAN clone3 (nr 435). Glibc 2.35 arm64 bahkan TIDAK memakai clone3 sama sekali
+  (0 situs; dibuktikan census qemu). clone(220) justru DI-WHITELIST Android dan
+  adalah jalur fallback utama pthread/fork — mem-patch-nya = mematikan jalur yang
+  benar. (Validasi qemu saat itu lolos karena qemu mengimplementasikan semua
+  syscall tanpa seccomp — bukan simulasi yang setia; node -e bahkan MACET dengan
+  libc hasil patch salah itu, terkonfirmasi belakangan.)
+
+### Metode baru: bukti-first (tanpa teori lagi)
+1. Whitelist RESMI app Android 12 direkonstruksi dari sumber bionic
+   (android12-d1-release): SYSCALLS.TXT + SECCOMP_ALLOWLIST_{COMMON,APP} −
+   SECCOMP_BLOCKLIST_{COMMON,APP} (parser = logika resmi genseccomp.py;
+   alias `func|alias` dan `name:syscall` ditangani sesuai parser aslinya).
+2. Census syscall RUNTIME lengkap via qemu-user -strace (835 baris, 44 unik).
+3. DIFF: satu-satunya syscall node di luar whitelist = **set_robust_list (99)** —
+   dipanggil glibc saat bootstrap thread utama (baris 125 = sebelum main!) dan
+   6× lagi per thread baru. TIDAK ADA di SYSCALLS.TXT → bionic tak memakainya →
+   Google tak pernah meng-whitelist-nya. Inilah penyebab exit=159 yang identik
+   di v1.0.0 dan v1.0.1.
+4. qemu kebetulan mengembalikan ENOSYS utk syscall ini → node jalan mulus =
+   simulasi alami perbaikan yang kita butuhkan.
+
+### Solusi v1.0.2 — patch-seccomp.py (penerus patch-clone3.py yang salah)
+- Stub `movz x8,#nr; …; svc #0` → svc diganti `mov w0,#-38` (ENOSYS), nilai
+  kembalian ENOSYS = konvensi "kernel lama" yang selalu punya jalur fallback:
+  - libc.so.6: set_robust_list×2, rseq×1, epoll_pwait2×2, close_range×2,
+    memfd_create×1 (8 situs)
+  - ld-linux-aarch64.so.1: rseq×1 + set_robust_list×1 (bootstrap thread utama)
+  - rg (ripgrep, biner STATIS musl): set_robust_list×2 (stub syscall sendiri)
+- clone(220) TIDAK disentuh — gerbang verify kini mewajibkan 3 situsnya UTUH.
+- Bonus bug laten: ugrep & bfs dinamis dgn PT_INTERP /lib/ld-linux-aarch64.so.1
+  (tak akan pernah ada di Android) → patchelf ke loader milik app (spt node).
+- MainActivity: marker payload-1.0.2.ok (v1.0.1 lupa ganti marker → payload lama
+  tak dijamin reinstal; kini dipastikan), decode sinyal tetap, versionCode 102.
+
+### Validasi v1.0.2 (semua lulus)
+- Census strace FINAL: set_robust_list/rseq/epoll_pwait2 = 0 panggilan;
+  44 syscall unik = NOL pelanggaran vs whitelist resmi Android 12
+- Fungsional arm64 (qemu): NODE_OK; THREAD_OK + SPAWN_OK (worker+exec);
+  rg 14.1.1 OK; gerbang verify LULUS (37 ELF, 122 NEEDED, clone utuh)

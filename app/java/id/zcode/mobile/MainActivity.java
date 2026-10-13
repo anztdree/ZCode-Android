@@ -48,9 +48,16 @@ import java.util.concurrent.TimeUnit;
  * v1.0.1: glibc bundel di-patch saat build (clone3 → return -ENOSYS) — Android 12
  * membunuh clone3 dgn SIGSYS (exit=159 di log v1.0.0); dengan ENOSYS, glibc jatuh
  * sendiri ke clone legacy yang di-whitelist Android.
+ * v1.0.2 (post-mortem jujur): v1.0.1 SALAH SASARAN — patch itu mengenai clone(220)
+ * yang justru DI-WHITELIST dan adalah jalur fallback-nya; clone3(435) bahkan tak
+ * dipakai glibc 2.35 arm64. Akar masalah sejati: syscall set_robust_list(99) —
+ * dipakai glibc saat bootstrap tiap thread (sebelum main!) dan TIDAK ada di
+ * whitelist app Android 12 (bionic tak memakainya). Solusi: patch-seccomp.py —
+ * svc stub set_robust_list/rseq/epoll_pwait2/close_range/memfd_create → mov w0,#-38
+ * (ENOSYS) di libc + ld.so + rg; clone(220) WAJIB UTUH (gerbang verify).
  */
 public class MainActivity extends Activity {
-    private static final String VERSION = "1.0.1";
+    private static final String VERSION = "1.0.2";
     private int port = 8080; // dipilih dinamis — 8080 bisa terpakai app lain
     private FrameLayout root;
     private WebView web;
@@ -268,7 +275,7 @@ public class MainActivity extends Activity {
         return "none";
     }
 
-    private String marker() { return new File(getFilesDir(), "payload-1.0.ok").getAbsolutePath(); }
+    private String marker() { return new File(getFilesDir(), "payload-1.0.2.ok").getAbsolutePath(); }
 
     private final java.util.ArrayDeque<String> engineTail = new java.util.ArrayDeque<>();
     private long lastSplashLog = 0;

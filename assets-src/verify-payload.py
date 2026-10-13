@@ -164,23 +164,38 @@ for c in critical:
     if not os.path.exists(os.path.join(PAYLOAD, c)):
         violations.append(f"PATH KRITIKAL HILANG: {c}")
 
-# --- 6: clone3 wajib sudah dipatch (Android 12+ membunuh clone3 dgn SIGSYS —
-#        post-mortem v1.0.0: exit=159 = 128+31 di itel S665L) ---
-CLONE3_OLD = {183: bytes.fromhex("881b80d2010000d4"),   # mov x8,#220; svc #0 (arm64)
-              62:  bytes.fromhex("b8dc0000000f05")}      # mov eax,220; syscall (x64)
-clone3_sites = 0
-for root, _dirs, files in os.walk(GLIBC):
-    for fn in sorted(files):
-        p = os.path.join(root, fn)
-        if os.path.islink(p) or not is_elf(p):
-            continue
-        old = CLONE3_OLD.get(elf_machine(p))
-        if old:
-            with open(p, "rb") as f:
-                n = f.read().count(old)
-            if n:
-                clone3_sites += n
-                violations.append(f"CLONE3 AKTIF ({n} situs): {p} — jalankan patch-clone3.py patch")
+# --- 6: kepatuhan seccomp Android 12 (pelajaran v1.0.0/v1.0.1) ---
+#  a) syscall di luar whitelist app Android 12 wajib sudah ENOSYS:
+#     set_robust_list(99), rseq(293), epoll_pwait2(441), close_range(436),
+#     memfd_create(279) — jalankan patch-seccomp.py saat assemble.
+#  b) clone(220) wajib UTUH (3 situs aktif) — jalur pthread_create/fork;
+#     v1.0.1 salah mem-patch ini (salah baca nomor: clone3=435, bukan 220).
+import subprocess
+pdir = os.path.dirname(os.path.abspath(__file__))
+tools_dir = os.path.join(PAYLOAD, "zhost", "res", "tools")
+r = subprocess.run([sys.executable, os.path.join(pdir, "patch-seccomp.py"), "check", GLIBC, tools_dir],
+                   capture_output=True, text=True)
+print(r.stdout.strip())
+if r.returncode != 0:
+    violations.append("SYSCALL TERLARANG AKTIF (lihat output di atas)")
+SVCB = bytes.fromhex("010000d4")
+CLONE_MOVZ = struct.pack("<I", 0xD2800000 | (220 << 5) | 8)
+_libc = os.path.join(GLIBC, "libc.so.6")
+clone_sites = 0
+with open(_libc, "rb") as f:
+    _d = f.read()
+_i = 0
+while True:
+    _j = _d.find(CLONE_MOVZ, _i)
+    if _j < 0:
+        break
+    if _d.find(SVCB, _j + 4, _j + 16) > 0:
+        clone_sites += 1
+    _i = _j + 4
+if clone_sites < 3:
+    violations.append(f"CLONE(220) rusak: {clone_sites} situs aktif (wajib 3) — pelajaran v1.0.1")
+else:
+    print(f"clone(220) utuh: {clone_sites} situs aktif ✓")
 
 print(f"ELF diperiksa: {checked['elf']}, NEEDED diperiksa: {checked['needed']}")
 if violations:
